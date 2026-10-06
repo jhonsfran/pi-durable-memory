@@ -1,0 +1,10 @@
+{
+	"name": "pi-memory-test",
+	"main": "./worker.ts",
+	// The newest date the workerd bundled with @cloudflare/vitest-pool-workers 0.22.0 accepts.
+	"compatibility_date": "2026-08-22",
+	"durable_objects": {
+		"bindings": [{ "name": "MEMORY", "class_name": "MemoryObject" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MemoryObject"] }]
+}

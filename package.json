@@ -37,7 +37,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test"
+    "test:workers": "vitest run --config vitest.workers.config.ts",
+    "check": "pnpm typecheck && pnpm test && pnpm test:workers"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "^1.0.4",
@@ -52,6 +53,7 @@
     }
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20261006.1",
     "@earendil-works/chord": "^1.0.4",
     "@earendil-works/pi-ai": "^1.0.4",
