@@ -1,0 +1,8 @@
+allowBuilds:
+  esbuild: true
+  "@google/genai": false
+  protobufjs: false
+# Pi Durable 1.0.x and the matching Workers types shipped on 2026-10-05; this package tracks them on release day.
+minimumReleaseAgeExclude:
+  - "@earendil-works/*"
+  - "@cloudflare/workers-types"
