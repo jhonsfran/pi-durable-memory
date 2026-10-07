@@ -1,23 +1,23 @@
-# pi-memory
+# pi-durable-memory
 
-Durable long-term memory for agents built on [Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable). One scope is an append-only log of one-line memories plus a binary tree of summaries over it. `wake()` returns a bounded view of the whole history, coarse for old memories and verbatim for recent ones. `recall()` and `zoom()` reach the exact original entries. The idea comes from [OptMem](https://github.com/VictorTaelin/OptMem); the implementation is independent.
+Durable long-term memory for agents built on [Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable). One scope is an append-only log of one-line memories plus a binary tree of summaries over it. `wake()` returns a bounded view of the whole history, coarse for old memories and verbatim for recent ones. `recall()` and `zoom()` reach the exact original entries. The idea comes from [OptMem](https://github.com/VictorTaelin/OptMem).
 
 Pi Durable's compaction manages the context of one conversation. This package manages knowledge that outlives conversations, sessions, and harnesses. They are different layers.
 
 ## Install
 
 ```sh
-pnpm add pi-memory
+pnpm add pi-durable-memory
 ```
 
-Peer dependencies `@earendil-works/pi-durable` and `@earendil-works/pi-ai` are needed only for the `pi-memory/pi` entry point. The Cloudflare entry point needs `@cloudflare/workers-types`.
+Peer dependencies `@earendil-works/pi-durable` and `@earendil-works/pi-ai` are needed only for the `pi-durable-memory/pi` entry point. The Cloudflare entry point needs `@cloudflare/workers-types`.
 
 ## Core
 
 ```ts
-import { createMemory, formatMemoryContext } from "pi-memory";
-import { createSqliteMemoryStore } from "pi-memory/sqlite";
-import { openNodeSqlite } from "pi-memory/sqlite/node";
+import { createMemory, formatMemoryContext } from "pi-durable-memory";
+import { createSqliteMemoryStore } from "pi-durable-memory/sqlite";
+import { openNodeSqlite } from "pi-durable-memory/sqlite/node";
 
 const db = openNodeSqlite("memory.db");
 const store = await createSqliteMemoryStore(db, { scope: "agent:seb" });
@@ -64,7 +64,7 @@ The core is one scope. A scope is any string the host chooses: `agent:abc`, `use
 
 ```ts
 import { createRegistry } from "@earendil-works/pi-durable";
-import { createPiMemoryExtension } from "pi-memory/pi";
+import { createPiMemoryExtension } from "pi-durable-memory/pi";
 
 const registry = createRegistry();
 registry.install(
@@ -83,12 +83,40 @@ The extension adds:
 
 Options: `maxItems` (96, split equally across scopes with a floor of 8), `compaction` (`"task"` runs the durable task after each note, `"inline"` awaits `compact()` in the tool, `"none"` leaves it to the host), `name`.
 
-Admission is explicit in this version: the model decides what to remember, guided by the section text. An automatic admission policy can be added later without changing the memory algorithm.
+See [Admission](#admission) for what gets stored.
+
+## Admission
+
+Admission is the decision of what becomes a memory. In this version it is explicit: the model calls `memory_note` when it judges something durable, and nothing is stored otherwise. The instruction paragraph in the `memory` section is the whole policy the model sees. It says to remember durable preferences, decisions, facts likely useful in future sessions, outcomes, and lessons, and not to remember greetings, transient execution details, routine tool output, or anything already remembered. One line, under the byte cap.
+
+The core never decides admission. `note()` stores what it is given. Host code that calls `note()` directly has already decided.
+
+The extension takes an optional `admission` hook that runs on every `memory_note` call before anything is written:
+
+```ts
+import type { MemoryAdmission } from "pi-durable-memory/pi";
+
+const admission: MemoryAdmission = {
+	async evaluate({ content, scope, scopes, conversationId }) {
+		if (/^(hi|hello|thanks)\b/i.test(content)) return { admit: false, reason: "greetings are not memories" };
+		if (content.includes("company-wide")) return { admit: true, scope: "company:acme" };
+		return { admit: true };
+	},
+};
+
+createPiMemoryExtension({ memory, scopes, admission });
+```
+
+A decision is `{ admit: true, content?, scope? }` to store, with an optional rewrite of the text or the target scope, or `{ admit: false, reason }` to skip. A skipped note returns `Not saved: <reason>` to the model as a normal result, not an error, so the model can move on. A rewritten scope must still be one of the conversation's scopes.
+
+What the hook is for, in order of ambition: filtering obvious non-memories, routing a note to a shared scope, de-duplicating against `recall()` before writing, and eventually an automatic classifier such as a small model that judges durability and importance. None of that changes the memory algorithm, and the default admits everything the model sends.
+
+What the hook is not: it does not run on host calls to `note()`, and it does not see the conversation. If an admission policy needs the transcript, build it from Pi Durable's hooks on the tool task and call `note()` yourself.
 
 ## Cloudflare
 
 ```ts
-import { defineMemoryObject, createMemoryClient } from "pi-memory/cloudflare";
+import { defineMemoryObject, createMemoryClient } from "pi-durable-memory/cloudflare";
 
 export const MemoryObject = defineMemoryObject<Env>({
 	summarizer: (env) => workersAiSummarizer(env.AI),

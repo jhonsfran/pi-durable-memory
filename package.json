@@ -1,5 +1,5 @@
 {
-  "name": "pi-memory",
+  "name": "pi-durable-memory",
   "version": "0.1.0",
   "description": "Durable hierarchical long-term memory for Pi Durable agents: append-only scoped log, binary summary tree, bounded wake, exact recall and zoom. SQLite backend, injected summarizer.",
   "type": "module",
