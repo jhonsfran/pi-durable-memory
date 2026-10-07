@@ -38,7 +38,6 @@ const NEXT_ID = "SELECT COALESCE(MAX(id) + 1, 0) AS id FROM memories WHERE scope
 
 /** Durable Object SQL allows 100 bound parameters per statement; 48 keys plus the scope stay under it. */
 const NODE_KEYS_PER_QUERY = 48;
-const IDS_PER_QUERY = 96;
 
 type MemoryRow = { id: number; created_at: number; content: string; source_id: string | null; supersedes: number | null; superseded_by: number | null };
 type NodeRow = { level: number; start_id: number; end_id: number; summary: string };
@@ -161,19 +160,6 @@ export async function createSqliteMemoryStore(db: SqlDatabase, options: { readon
 				range.endId,
 			);
 			return rows.map(toEntry);
-		},
-
-		async getMemoriesByIds(ids) {
-			const found: MemoryEntry[] = [];
-			for (const part of chunk(ids, IDS_PER_QUERY)) {
-				const rows = await db.all<MemoryRow>(
-					`SELECT ${MEMORY_COLUMNS} FROM ${MEMORY_FROM} WHERE m.scope = ? AND m.id IN (${part.map(() => "?").join(", ")}) GROUP BY m.id`,
-					scope,
-					...part,
-				);
-				found.push(...rows.map(toEntry));
-			}
-			return found;
 		},
 
 		async searchMemories(query, limit) {

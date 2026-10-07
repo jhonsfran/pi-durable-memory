@@ -2,7 +2,7 @@ import { APIPromise } from "@typesafe-ai/sdk";
 import type { Questions, SystemOneRequest, SystemOneResult, TypeSafeClient } from "@typesafe-ai/sdk";
 import { describe, expect, it } from "vitest";
 import { createJevJudge } from "../src/jev/index.js";
-import type { JudgeInput } from "../src/pi/index.js";
+import type { JudgeInput } from "../src/index.js";
 
 type Answers = Record<string, { type: "noul"; noul: number } | { type: "choice"; choice: string; confidence: number; probabilities: Record<string, number> }>;
 

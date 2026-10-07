@@ -5,13 +5,11 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Harness, MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
 import type { Conversation } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
-import { createMemory } from "../src/index.js";
-import type { Embedder, Memory, MemoryStore } from "../src/index.js";
-import { createPiMemoryExtension, createRetrievalAdmission } from "../src/pi/index.js";
-import type { AdmissionJudge, JudgeInput, JudgeVerdict, MemoryAdmission, PiMemoryExtensionOptions } from "../src/pi/index.js";
-import { createSqliteMemoryStore, createSqliteVectorIndex } from "../src/sqlite/index.js";
-import { openNodeSqlite } from "../src/sqlite/node.js";
-import { conceptEmbedder, joinSummarizer } from "./helpers.js";
+import { createMemory, createPiMemoryExtension, createRetrievalAdmission } from "../src/index.js";
+import type { AdmissionJudge, JudgeInput, JudgeVerdict, Memory, MemoryAdmission, MemoryStore, PiMemoryExtensionOptions } from "../src/index.js";
+import { createSqliteMemoryStore } from "../src/sqlite/store.js";
+import { openNodeSqlite } from "./node-sqlite.js";
+import { joinSummarizer } from "./helpers.js";
 
 const context = BACKGROUND_CONTEXT;
 const SCOPES = ["agent:a", "project:x"] as const;
@@ -24,7 +22,7 @@ const INSTRUCTIONS =
 	"A #a-b line summarizes memories a through b: use memory_recall for exact old facts and memory_zoom on a #a-b line to open it.";
 
 /** One SQLite database shared by every scope, with one `Memory` instance per scope so tool calls and assertions see the same log. */
-function scopedMemories(embedder?: Embedder) {
+function scopedMemories() {
 	const db = openNodeSqlite(":memory:");
 	const stores = new Map<string, Promise<MemoryStore>>();
 	const memories = new Map<string, Promise<Memory>>();
@@ -39,10 +37,7 @@ function scopedMemories(embedder?: Embedder) {
 	const memory: PiMemoryExtensionOptions["memory"] = (scope) => {
 		let pending = memories.get(scope);
 		if (pending === undefined) {
-			pending = store(scope).then(async (scoped) => {
-				const index = embedder === undefined ? undefined : await createSqliteVectorIndex(db, { scope, embedder });
-				return createMemory({ store: scoped, summarizer: joinSummarizer, index });
-			});
+			pending = store(scope).then((scoped) => createMemory({ store: scoped, summarizer: joinSummarizer }));
 			memories.set(scope, pending);
 		}
 		return pending;
@@ -50,8 +45,8 @@ function scopedMemories(embedder?: Embedder) {
 	return { memory, store };
 }
 
-async function openHarness(options: Partial<PiMemoryExtensionOptions> = {}, embedder?: Embedder) {
-	const { memory, store } = scopedMemories(embedder);
+async function openHarness(options: Partial<PiMemoryExtensionOptions> = {}) {
+	const { memory, store } = scopedMemories();
 	const extension = createPiMemoryExtension({ memory, scopes: () => SCOPES, ...options });
 	const faux = fauxProvider();
 	const models = createModels();
@@ -86,14 +81,6 @@ async function memorySection(root: Conversation): Promise<string | null | undefi
 	return system?.sections?.memory;
 }
 
-/** Settle every live compaction task; background tasks are outside `wait()` and `waitForIdle()`. */
-async function settleCompaction(harness: Harness): Promise<void> {
-	const { tasks } = await harness.inspect(context);
-	for (const task of tasks) {
-		if (task.record.kind === "memory.compact") await harness.waitForTask(task.record.id, context);
-	}
-}
-
 describe("pi extension", () => {
 	it("renders the instruction paragraph and one wake per scope in the memory section", async () => {
 		const { memory, faux, root, harness } = await openHarness();
@@ -108,7 +95,7 @@ describe("pi extension", () => {
 	});
 
 	it("memory_note writes to the first scope with the tool task as its sourceId", async () => {
-		const { memory, store, faux, root, harness } = await openHarness({ compaction: "none" });
+		const { memory, store, faux, root, harness } = await openHarness();
 		await run(root, faux, [toolCall("memory_note", { content: "User prefers concise answers." }), fauxAssistantMessage("Noted.")]);
 		expect(await toolResults(root)).toEqual([{ text: "Saved as #0 in agent:a.", isError: false }]);
 		const a = await memory("agent:a");
@@ -121,26 +108,8 @@ describe("pi extension", () => {
 		await harness.close(context);
 	});
 
-	it("runs the compaction task after a note", async () => {
-		const { memory, faux, root, harness } = await openHarness({ compaction: "task" });
-		await run(root, faux, [
-			toolCall("memory_note", { content: "m0" }),
-			toolCall("memory_note", { content: "m1" }),
-			toolCall("memory_note", { content: "m2" }),
-			fauxAssistantMessage("Done."),
-		]);
-		await settleCompaction(harness);
-		const a = await memory("agent:a");
-		expect(await a.pending()).toBe(0);
-		expect((await a.wake({ maxItems: 2 })).items).toEqual([
-			{ type: "summary", startId: 0, endId: 1, content: "[m0 m1]" },
-			{ type: "memory", id: 2, createdAt: expect.any(Number), content: "m2" },
-		]);
-		await harness.close(context);
-	});
-
 	it("rejects a scope the conversation does not have and writes nothing", async () => {
-		const { memory, faux, root, harness } = await openHarness({ compaction: "none" });
+		const { memory, faux, root, harness } = await openHarness();
 		await run(root, faux, [toolCall("memory_note", { content: "secret", scope: "company:z" }), fauxAssistantMessage("Sorry.")]);
 		expect(await toolResults(root)).toEqual([{ text: 'Unknown scope "company:z". Allowed scopes: agent:a, project:x.', isError: true }]);
 		expect((await (await memory("agent:a")).wake()).total).toBe(0);
@@ -149,7 +118,7 @@ describe("pi extension", () => {
 	});
 
 	it("memory_recall finds by words and memory_zoom opens a block", async () => {
-		const { memory, faux, root, harness } = await openHarness({ compaction: "none" });
+		const { memory, faux, root, harness } = await openHarness();
 		const a = await memory("agent:a");
 		for (let id = 0; id < 8; id++) await a.note({ content: `fact ${["zero", "one", "two", "three", "four", "five", "six", "seven"][id]}`, createdAt: id });
 		await a.compact();
@@ -168,7 +137,7 @@ describe("pi extension", () => {
 	});
 
 	it("memory_recall searches every scope with headers when no scope is given", async () => {
-		const { memory, faux, root, harness } = await openHarness({ compaction: "none" });
+		const { memory, faux, root, harness } = await openHarness();
 		await (await memory("agent:a")).note({ content: "likes tabs", createdAt: 1 });
 		await (await memory("project:x")).note({ content: "tabs not spaces", createdAt: 2 });
 		await run(root, faux, [toolCall("memory_recall", { query: "tabs" }), toolCall("memory_recall", { query: "nothing" }), fauxAssistantMessage("Done.")]);
@@ -183,7 +152,7 @@ describe("pi extension", () => {
 		const admission: MemoryAdmission = {
 			evaluate: ({ content }) => (content.includes("hello") ? { admit: false, reason: "greetings are not memories." } : { admit: true }),
 		};
-		const { memory, faux, root, harness } = await openHarness({ compaction: "none", admission });
+		const { memory, faux, root, harness } = await openHarness({ admission });
 		await run(root, faux, [toolCall("memory_note", { content: "hello there" }), fauxAssistantMessage("Ok.")]);
 		expect(await toolResults(root)).toEqual([{ text: "Not saved: greetings are not memories.", isError: false }]);
 		expect((await (await memory("agent:a")).wake()).total).toBe(0);
@@ -194,7 +163,7 @@ describe("pi extension", () => {
 		const admission: MemoryAdmission = {
 			evaluate: ({ content }) => ({ admit: true, content: content.toUpperCase(), scope: "project:x" }),
 		};
-		const { memory, faux, root, harness } = await openHarness({ compaction: "none", admission });
+		const { memory, faux, root, harness } = await openHarness({ admission });
 		await run(root, faux, [toolCall("memory_note", { content: "deploys go through ci" }), fauxAssistantMessage("Ok.")]);
 		expect(await toolResults(root)).toEqual([{ text: "Saved as #0 in project:x.", isError: false }]);
 		expect((await (await memory("project:x")).wake()).items).toEqual([
@@ -223,9 +192,9 @@ describe("pi extension", () => {
 		it("hands the judge the nearest memories and supersedes the one it names", async () => {
 			const { judge, inputs } = scriptedJudge([{ verdict: "new" }, { verdict: "supersedes", id: 0 }]);
 			const admission = createRetrievalAdmission({ judge });
-			const { memory, faux, root, harness } = await openHarness({ compaction: "none", admission }, conceptEmbedder);
+			const { memory, faux, root, harness } = await openHarness({ admission });
 			await run(root, faux, [
-				toolCall("memory_note", { content: "prefers brevity" }),
+				toolCall("memory_note", { content: "prefers brevity, detail only on request" }),
 				toolCall("memory_note", { content: "prefers detail" }),
 				fauxAssistantMessage("Ok."),
 			]);
@@ -235,8 +204,8 @@ describe("pi extension", () => {
 			]);
 			expect((await (await memory("agent:a")).wake()).items).toEqual([{ type: "memory", id: 1, createdAt: expect.any(Number), content: "prefers detail" }]);
 			expect(inputs).toEqual([
-				{ candidate: "prefers brevity", neighbors: [], scope: "agent:a", scopes: SCOPES },
-				{ candidate: "prefers detail", neighbors: [{ id: 0, content: "prefers brevity" }], scope: "agent:a", scopes: SCOPES },
+				{ candidate: "prefers brevity, detail only on request", neighbors: [], scope: "agent:a", scopes: SCOPES },
+				{ candidate: "prefers detail", neighbors: [{ id: 0, content: "prefers brevity, detail only on request" }], scope: "agent:a", scopes: SCOPES },
 			]);
 			await harness.close(context);
 		});
@@ -244,9 +213,9 @@ describe("pi extension", () => {
 		it("does not save a duplicate and names the memory it duplicates", async () => {
 			const { judge } = scriptedJudge([{ verdict: "duplicate", of: 0 }]);
 			const admission = createRetrievalAdmission({ judge });
-			const { memory, faux, root, harness } = await openHarness({ compaction: "none", admission }, conceptEmbedder);
-			await (await memory("agent:a")).note({ content: "prefers brevity", createdAt: 1 });
-			await run(root, faux, [toolCall("memory_note", { content: "likes short answers" }), fauxAssistantMessage("Ok.")]);
+			const { memory, faux, root, harness } = await openHarness({ admission });
+			await (await memory("agent:a")).note({ content: "prefers brevity, detail only on request", createdAt: 1 });
+			await run(root, faux, [toolCall("memory_note", { content: "prefers brevity" }), fauxAssistantMessage("Ok.")]);
 			expect(await toolResults(root)).toEqual([{ text: "Not saved: duplicate of #0", isError: false }]);
 			expect((await (await memory("agent:a")).wake()).total).toBe(1);
 			await harness.close(context);
@@ -255,13 +224,13 @@ describe("pi extension", () => {
 		it("stores a plain new memory when the judge names an id it was not shown", async () => {
 			const { judge, inputs } = scriptedJudge([{ verdict: "supersedes", id: 99 }]);
 			const admission = createRetrievalAdmission({ judge });
-			const { memory, store, faux, root, harness } = await openHarness({ compaction: "none", admission }, conceptEmbedder);
-			await (await memory("agent:a")).note({ content: "prefers brevity", createdAt: 1 });
+			const { memory, store, faux, root, harness } = await openHarness({ admission });
+			await (await memory("agent:a")).note({ content: "prefers brevity, detail only on request", createdAt: 1 });
 			await run(root, faux, [toolCall("memory_note", { content: "prefers detail" }), fauxAssistantMessage("Ok.")]);
-			expect(inputs.map((input) => input.neighbors)).toEqual([[{ id: 0, content: "prefers brevity" }]]);
+			expect(inputs.map((input) => input.neighbors)).toEqual([[{ id: 0, content: "prefers brevity, detail only on request" }]]);
 			expect(await toolResults(root)).toEqual([{ text: "Saved as #1 in agent:a.", isError: false }]);
 			expect(await (await store("agent:a")).getMemories({ startId: 0, endId: 1 })).toEqual([
-				{ id: 0, createdAt: 1, content: "prefers brevity" },
+				{ id: 0, createdAt: 1, content: "prefers brevity, detail only on request" },
 				{ id: 1, createdAt: expect.any(Number), content: "prefers detail", sourceId: expect.any(String) },
 			]);
 			await harness.close(context);
@@ -269,7 +238,7 @@ describe("pi extension", () => {
 	});
 
 	it("returns the length error for a note over 280 bytes and writes nothing", async () => {
-		const { memory, faux, root, harness } = await openHarness({ compaction: "none" });
+		const { memory, faux, root, harness } = await openHarness();
 		await run(root, faux, [toolCall("memory_note", { content: "x".repeat(300) }), fauxAssistantMessage("Shorter.")]);
 		expect(await toolResults(root)).toEqual([
 			{ text: "Too long: 300 bytes, limit 280. Accented characters cost 2 bytes or more", isError: true },

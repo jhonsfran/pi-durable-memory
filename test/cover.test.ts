@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cover } from "../src/index.js";
+import { cover } from "../src/core/cover.js";
 
 const size = (block: { startId: number; endId: number }): number => block.endId - block.startId + 1;
 

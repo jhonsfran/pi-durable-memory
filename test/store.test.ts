@@ -2,8 +2,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { SqlDatabase } from "../src/sqlite/index.js";
-import { openNodeSqlite } from "../src/sqlite/node.js";
+import type { SqlDatabase } from "../src/sqlite/database.js";
+import { openNodeSqlite } from "./node-sqlite.js";
 import { noteMany, openFixture } from "./helpers.js";
 
 /** A database whose FTS5 table creation fails, forcing the LIKE fallback. */
@@ -53,7 +53,7 @@ describe("sqlite store", () => {
 		expect(await b.store.count()).toBe(1);
 		expect(await b.memory.wake()).toEqual({ total: 1, items: [{ type: "memory", id: 0, createdAt: 1, content: "only in b" }] });
 		expect(await b.memory.recall("m1")).toEqual([]);
-		expect(await a.memory.recall("m1")).toEqual([{ type: "memory", id: 1, createdAt: 1_700_000_000_001, content: "m1" }]);
+		expect(await a.memory.recall("m1")).toEqual([{ id: 1, createdAt: 1_700_000_000_001, content: "m1" }]);
 		expect(await b.store.getNodes([{ level: 1, startId: 0 }, { level: 2, startId: 0 }])).toEqual([]);
 		expect(await b.store.levelLength(1)).toBe(0);
 		expect(await a.store.levelLength(1)).toBe(2);
@@ -72,7 +72,7 @@ describe("sqlite store", () => {
 			{ id: 1, createdAt: 2, content: "new", supersedes: 0 },
 		]);
 		const reopened = await openFixture({ db });
-		expect(await reopened.store.getMemoriesByIds([1, 0, 9])).toEqual([
+		expect(await reopened.store.getMemories({ startId: 0, endId: 9 })).toEqual([
 			{ id: 0, createdAt: 1, content: "old", supersededBy: 1 },
 			{ id: 1, createdAt: 2, content: "new", supersedes: 0 },
 		]);
@@ -95,7 +95,7 @@ describe("sqlite store", () => {
 			await memory.note({ content: "Alpha AND beta on the cloud", createdAt: 2 });
 			await memory.note({ content: "cloud native from day one", createdAt: 3 });
 			await memory.note({ content: "nothing relevant here", createdAt: 4 });
-			const ids = async (query: string, limit?: number) => (await memory.recall(query, { limit })).map((item) => (item.type === "memory" ? item.id : item));
+			const ids = async (query: string, limit?: number) => (await memory.recall(query, { limit })).map((entry) => entry.id);
 			expect(await ids('"cloud first"')).toEqual([0]);
 			expect(await ids("alpha AND beta")).toEqual([1]);
 			expect(await ids("cloud")).toEqual([2, 1, 0]);

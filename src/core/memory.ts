@@ -1,23 +1,9 @@
 import { blockAt, blockLevel, blockSize, childrenOf, cover, isAlignedBlock, label } from "./cover.js";
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong } from "./errors.js";
-import { encodeIndexKey } from "./index-key.js";
-import type {
-	CreateMemoryOptions,
-	IndexKey,
-	Memory,
-	MemoryEntry,
-	MemoryItem,
-	MemoryLimits,
-	MemoryNode,
-	MemoryRange,
-	RecallItem,
-	SummarizeInput,
-} from "./types.js";
+import type { CreateMemoryOptions, Memory, MemoryEntry, MemoryItem, MemoryLimits, MemoryNode, MemoryRange, SummarizeInput } from "./types.js";
 
 const DEFAULT_LIMITS: MemoryLimits = { maxEntryBytes: 280, rawThreshold: 16, maxItems: 96 };
 const DEFAULT_RECALL_LIMIT = 10;
-/** Reciprocal rank fusion constant: `score = sum of 1 / (RRF_K + rank)` over the lists a key appears in. */
-const RRF_K = 60;
 /** Stored as the summary of a block whose every memory was superseded, so the summarizer never sees an empty block. */
 const SUPERSEDED_BLOCK_SUMMARY = "(every memory in this block was superseded)";
 
@@ -45,20 +31,6 @@ const nodeKey = (level: number, startId: number): string => `${level}:${startId}
 /** A memory nobody has superseded; only these reach the model and the summarizer. */
 const live = (entry: MemoryEntry): boolean => entry.supersededBy === undefined;
 
-/** Keys of several ranked lists merged by reciprocal rank, best first; ties keep list order. */
-function fuseByReciprocalRank(lists: ReadonlyArray<readonly IndexKey[]>): IndexKey[] {
-	const fused = new Map<string, { key: IndexKey; score: number }>();
-	for (const list of lists) {
-		list.forEach((key, i) => {
-			const encoded = encodeIndexKey(key);
-			const hit = fused.get(encoded) ?? { key, score: 0 };
-			hit.score += 1 / (RRF_K + i + 1);
-			fused.set(encoded, hit);
-		});
-	}
-	return [...fused.values()].sort((a, b) => b.score - a.score).map((hit) => hit.key);
-}
-
 function assertBlock(range: MemoryRange): void {
 	if (!isAlignedBlock(range) || blockSize(range) < 2) {
 		throw new InvalidRange(`${label(range)} is not a block: use an aligned power-of-two range of at least 2 memories, like #16-31`);
@@ -76,7 +48,7 @@ function contiguousRuns(blocks: readonly MemoryRange[]): MemoryRange[] {
 	return runs;
 }
 
-export function createMemory({ store, summarizer, index, limits }: CreateMemoryOptions): Memory {
+export function createMemory({ store, summarizer, limits }: CreateMemoryOptions): Memory {
 	const { maxEntryBytes, rawThreshold, maxItems } = { ...DEFAULT_LIMITS, ...limits };
 
 	/** Each block rendered as `wake()` shows it, in the given order, with one read per kind. */
@@ -140,9 +112,7 @@ export function createMemory({ store, summarizer, index, limits }: CreateMemoryO
 					throw new InvalidRange(`#${supersedes} is not in the memory: it holds ${total} memories`);
 				}
 			}
-			const entry = await store.appendMemory({ content, createdAt: input.createdAt ?? Date.now(), sourceId: input.sourceId, supersedes });
-			await index?.upsert([{ key: { kind: "memory", id: entry.id }, text: entry.content }]);
-			return entry;
+			return store.appendMemory({ content, createdAt: input.createdAt ?? Date.now(), sourceId: input.sourceId, supersedes });
 		},
 
 		async wake(options) {
@@ -152,33 +122,9 @@ export function createMemory({ store, summarizer, index, limits }: CreateMemoryO
 		},
 
 		async recall(query, options) {
-			const limit = options?.limit ?? DEFAULT_RECALL_LIMIT;
-			const summaries = options?.summaries ?? true;
-			const [lexical, semantic] = await Promise.all([
-				store.searchMemories(query, limit),
-				index === undefined || query.trim().length === 0 ? [] : index.query(query, limit),
-			]);
-			const fused = fuseByReciprocalRank([lexical.map((entry) => ({ kind: "memory", id: entry.id })), semantic.map((hit) => hit.key)]);
-			const memories = new Map<number, MemoryEntry>(lexical.map((entry) => [entry.id, entry]));
-			const missingIds = fused.flatMap((key) => (key.kind === "memory" && !memories.has(key.id) ? [key.id] : []));
-			const nodeKeys = summaries ? fused.flatMap((key) => (key.kind === "node" ? [key] : [])) : [];
-			const [resolved, nodes] = await Promise.all([
-				missingIds.length === 0 ? [] : store.getMemoriesByIds(missingIds),
-				nodeKeys.length === 0 ? [] : store.getNodes(nodeKeys),
-			]);
-			for (const entry of resolved) memories.set(entry.id, entry);
-			const summariesByKey = new Map<string, MemoryNode>(nodes.map((node) => [nodeKey(node.level, node.startId), node]));
-			// Superseded memories and forgotten nodes are dropped after fusion, so the result can hold fewer than `limit` items.
-			return fused
-				.flatMap((key): RecallItem[] => {
-					if (key.kind === "memory") {
-						const entry = memories.get(key.id);
-						return entry !== undefined && live(entry) ? [{ type: "memory", id: entry.id, createdAt: entry.createdAt, content: entry.content }] : [];
-					}
-					const node = summariesByKey.get(nodeKey(key.level, key.startId));
-					return node === undefined ? [] : [{ type: "summary", startId: node.startId, endId: node.endId, content: node.summary }];
-				})
-				.slice(0, limit);
+			const entries = await store.searchMemories(query, options?.limit ?? DEFAULT_RECALL_LIMIT);
+			// Superseded memories are dropped after the search, so the result can hold fewer than `limit` entries.
+			return entries.filter(live);
 		},
 
 		async zoom(range) {
@@ -200,8 +146,6 @@ export function createMemory({ store, summarizer, index, limits }: CreateMemoryO
 					const items = await summarizeInputs(level, block);
 					const raw = items.length === 0 ? SUPERSEDED_BLOCK_SUMMARY : await summarizer.summarize({ ...block, items, maxBytes: maxEntryBytes });
 					const summary = truncateUtf8(normalizeEntry(raw), maxEntryBytes);
-					// Indexed before `putNode` so a failed upsert leaves the node unbuilt and the host's retry redoes both.
-					await index?.upsert([{ key: { kind: "node", level, startId: block.startId }, text: summary }]);
 					if (await store.putNode({ level, ...block, summary })) merged++;
 				}
 			}

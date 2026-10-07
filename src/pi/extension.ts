@@ -5,8 +5,6 @@ import type { Extension, ToolExecutionResult, ToolRegistration } from "@earendil
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong } from "../core/errors.js";
 import { formatMemoryContext, formatMemoryItems } from "../core/format.js";
 import type { Memory } from "../core/types.js";
-import { createMemoryCompactionTask } from "./compaction-task.js";
-import type { MemoryResolver } from "./compaction-task.js";
 
 export interface AdmissionInput {
 	readonly content: string;
@@ -33,16 +31,14 @@ export interface MemoryAdmission {
 }
 
 export interface PiMemoryExtensionOptions {
-	/** The memory for one scope. Called per request and per tool call; implementations should be cheap or cache. */
-	readonly memory: MemoryResolver;
+	/** The memory for one scope, normally `createMemoryClient(env.MEMORY)`. Called per request and per tool call; implementations should be cheap or cache. */
+	readonly memory: (scope: string) => Memory | Promise<Memory>;
 	/** Decides whether a memory_note call is stored, and may rewrite its content or scope. Default: admit as given. */
 	readonly admission?: MemoryAdmission | undefined;
 	/** Scopes a conversation reads and may write, in order. The first is the default write scope. */
 	readonly scopes: (input: { readonly conversationId: string }) => readonly string[] | Promise<readonly string[]>;
 	/** Wake budget across scopes. Default 96, split equally, with a floor of 8 per scope. */
 	readonly maxItems?: number | undefined;
-	/** After a note: "task" runs a durable Pi task (default), "inline" awaits `compact()` in the tool, "none" leaves it to the host, such as a Durable Object alarm. */
-	readonly compaction?: "task" | "inline" | "none" | undefined;
 	/** Extension name. Default "memory". */
 	readonly name?: string | undefined;
 }
@@ -98,9 +94,7 @@ const renderScope = (scope: string, body: string): string => `[${scope}]\n${body
 export function createPiMemoryExtension(options: PiMemoryExtensionOptions): Extension {
 	const name = options.name ?? "memory";
 	const admission = options.admission ?? ADMIT_AS_GIVEN;
-	const compaction = options.compaction ?? "task";
 	const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS;
-	const compactionTask = createMemoryCompactionTask(options.memory, name);
 	const scopesOf = (conversationId: number): Promise<readonly string[]> =>
 		Promise.resolve(options.scopes({ conversationId: String(conversationId) }));
 
@@ -127,7 +121,7 @@ export function createPiMemoryExtension(options: PiMemoryExtensionOptions): Exte
 				scope: Type.Optional(Type.String({ description: "Target scope; default is the first scope" })),
 			}),
 			replay: "safe",
-			execute: async (args, api, context) => {
+			execute: async (args, api) => {
 				const scopes = await scopesOf(api.conversationId);
 				const requested = selectScope(scopes, args.scope);
 				const requestedMemory = await options.memory(requested);
@@ -142,20 +136,6 @@ export function createPiMemoryExtension(options: PiMemoryExtensionOptions): Exte
 				const scope = selectScope(scopes, decision.scope ?? requested);
 				const memory = scope === requested ? requestedMemory : await options.memory(scope);
 				const { id } = await memory.note({ content: decision.content ?? args.content, sourceId: String(api.taskId), supersedes: decision.supersedes });
-				switch (compaction) {
-					case "task":
-						await api.createTask(compactionTask, { scope }, { ownership: { kind: "conversation" }, background: true }, context);
-						break;
-					case "inline":
-						await memory.compact();
-						break;
-					case "none":
-						break;
-					default: {
-						const exhaustive: never = compaction;
-						throw new Error(`Unknown compaction mode ${String(exhaustive)}`);
-					}
-				}
 				return text(`Saved as #${id} in ${scope}.`);
 			},
 		}),
@@ -178,7 +158,7 @@ export function createPiMemoryExtension(options: PiMemoryExtensionOptions): Exte
 					searched.map(async (scope) => {
 						const hits = await (await options.memory(scope)).recall(args.query, { limit: args.limit });
 						if (hits.length === 0) return undefined;
-						const lines = formatMemoryItems(hits);
+						const lines = hits.map((hit) => `#${hit.id} ${hit.content}`).join("\n");
 						return searched.length > 1 ? renderScope(scope, lines) : lines;
 					}),
 				);
@@ -209,6 +189,5 @@ export function createPiMemoryExtension(options: PiMemoryExtensionOptions): Exte
 		name,
 		sections: [memorySection],
 		tools: [note, recall, zoom],
-		tasks: [compactionTask],
 	});
 }

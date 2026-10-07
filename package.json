@@ -1,7 +1,7 @@
 {
   "name": "pi-durable-memory",
   "version": "0.1.0",
-  "description": "Durable hierarchical long-term memory for Pi Durable agents: append-only scoped log, binary summary tree, bounded wake, exact recall and zoom. SQLite backend, injected summarizer.",
+  "description": "Hierarchical long-term memory for Pi Durable agents on Cloudflare Durable Objects: one object per scope with an append-only log, a binary summary tree, bounded wake, full-text recall and zoom. Injected summarizer.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -11,18 +11,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./sqlite": {
-      "types": "./dist/sqlite/index.d.ts",
-      "import": "./dist/sqlite/index.js"
-    },
-    "./sqlite/node": {
-      "types": "./dist/sqlite/node.d.ts",
-      "import": "./dist/sqlite/node.js"
-    },
-    "./pi": {
-      "types": "./dist/pi/index.d.ts",
-      "import": "./dist/pi/index.js"
     },
     "./cloudflare": {
       "types": "./dist/cloudflare/index.d.ts",

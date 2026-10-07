@@ -1,8 +1,8 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { createSqlDatabase } from "./adapter.js";
-import type { SqlDatabase } from "./database.js";
+import { createSqlDatabase } from "../src/sqlite/adapter.js";
+import type { SqlDatabase } from "../src/sqlite/database.js";
 
-/** Opens a `node:sqlite` database behind the `SqlDatabase` facade. `:memory:` works; file databases use WAL. */
+/** Opens a `node:sqlite` database behind the `SqlDatabase` facade, so the core and Pi suites run without a Workers runtime. `:memory:` works; file databases use WAL. */
 export function openNodeSqlite(path: string): SqlDatabase {
 	const database = new DatabaseSync(path);
 	if (path !== ":memory:") database.exec("PRAGMA journal_mode = WAL");
