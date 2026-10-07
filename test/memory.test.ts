@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong, formatMemoryContext } from "../src/index.js";
 import type { MemoryItem, MemoryNode, MemoryRange, MemoryStore } from "../src/index.js";
-import { conceptEmbedder, constantSummarizer, noteMany, openFixture, seedMemoriesBySql } from "./helpers.js";
+import { conceptEmbedder, constantSummarizer, joinSummarizer, noteMany, openFixture, seedMemoriesBySql } from "./helpers.js";
 
 const size = (range: MemoryRange): number => range.endId - range.startId + 1;
 
@@ -237,6 +237,20 @@ describe("memory", () => {
 		expect(await memory.recall("prefers")).toEqual([{ type: "memory", id: 1, createdAt: 2, content: "prefers detail" }]);
 		await expect(memory.note({ content: "prefers tables", supersedes: 7 })).rejects.toThrow(new InvalidRange("#7 is not in the memory: it holds 2 memories"));
 		expect(await store.count()).toBe(2);
+	});
+
+	it("summarizes a block whose every memory was superseded with a fixed line instead of calling the summarizer", async () => {
+		const { memory, store } = await openFixture({
+			summarizer: { async summarize({ items }) { if (items.length === 0) throw new Error("summarizer called with no items"); return joinSummarizer.summarize({ startId: 0, endId: 0, items, maxBytes: 280 }); } },
+		});
+		await memory.note({ content: "prefers brevity", createdAt: 1 });
+		await memory.note({ content: "prefers detail", supersedes: 0, createdAt: 2 });
+		await memory.note({ content: "prefers tables", supersedes: 1, createdAt: 3 });
+		expect(await memory.compact()).toEqual({ merged: 1, pending: 0 });
+		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([
+			{ level: 1, startId: 0, endId: 1, summary: "(every memory in this block was superseded)" },
+		]);
+		expect(formatMemoryContext(await memory.wake({ maxItems: 2 }))).toBe("#0-1 (every memory in this block was superseded)\n#2 prefers tables");
 	});
 
 	describe("hybrid recall over a SQLite vector index", () => {

@@ -6,12 +6,12 @@ import { Harness, MemoryStorage, createRegistry } from "@earendil-works/pi-durab
 import type { Conversation } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import { createMemory } from "../src/index.js";
-import type { Memory, MemoryStore } from "../src/index.js";
-import { createPiMemoryExtension } from "../src/pi/index.js";
-import type { MemoryAdmission, PiMemoryExtensionOptions } from "../src/pi/index.js";
-import { createSqliteMemoryStore } from "../src/sqlite/index.js";
+import type { Embedder, Memory, MemoryStore } from "../src/index.js";
+import { createPiMemoryExtension, createRetrievalAdmission } from "../src/pi/index.js";
+import type { AdmissionJudge, JudgeInput, JudgeVerdict, MemoryAdmission, PiMemoryExtensionOptions } from "../src/pi/index.js";
+import { createSqliteMemoryStore, createSqliteVectorIndex } from "../src/sqlite/index.js";
 import { openNodeSqlite } from "../src/sqlite/node.js";
-import { joinSummarizer } from "./helpers.js";
+import { conceptEmbedder, joinSummarizer } from "./helpers.js";
 
 const context = BACKGROUND_CONTEXT;
 const SCOPES = ["agent:a", "project:x"] as const;
@@ -24,7 +24,7 @@ const INSTRUCTIONS =
 	"A #a-b line summarizes memories a through b: use memory_recall for exact old facts and memory_zoom on a #a-b line to open it.";
 
 /** One SQLite database shared by every scope, with one `Memory` instance per scope so tool calls and assertions see the same log. */
-function scopedMemories() {
+function scopedMemories(embedder?: Embedder) {
 	const db = openNodeSqlite(":memory:");
 	const stores = new Map<string, Promise<MemoryStore>>();
 	const memories = new Map<string, Promise<Memory>>();
@@ -39,7 +39,10 @@ function scopedMemories() {
 	const memory: PiMemoryExtensionOptions["memory"] = (scope) => {
 		let pending = memories.get(scope);
 		if (pending === undefined) {
-			pending = store(scope).then((scoped) => createMemory({ store: scoped, summarizer: joinSummarizer }));
+			pending = store(scope).then(async (scoped) => {
+				const index = embedder === undefined ? undefined : await createSqliteVectorIndex(db, { scope, embedder });
+				return createMemory({ store: scoped, summarizer: joinSummarizer, index });
+			});
 			memories.set(scope, pending);
 		}
 		return pending;
@@ -47,8 +50,8 @@ function scopedMemories() {
 	return { memory, store };
 }
 
-async function openHarness(options: Partial<PiMemoryExtensionOptions> = {}) {
-	const { memory, store } = scopedMemories();
+async function openHarness(options: Partial<PiMemoryExtensionOptions> = {}, embedder?: Embedder) {
+	const { memory, store } = scopedMemories(embedder);
 	const extension = createPiMemoryExtension({ memory, scopes: () => SCOPES, ...options });
 	const faux = fauxProvider();
 	const models = createModels();
@@ -199,6 +202,70 @@ describe("pi extension", () => {
 		]);
 		expect((await (await memory("agent:a")).wake()).total).toBe(0);
 		await harness.close(context);
+	});
+
+	/** Answers the scripted verdicts in order and keeps every input it was asked about. */
+	function scriptedJudge(verdicts: readonly JudgeVerdict[]) {
+		const inputs: JudgeInput[] = [];
+		let next = 0;
+		const judge: AdmissionJudge = {
+			judge(input) {
+				inputs.push(input);
+				const verdict = verdicts[next++];
+				if (verdict === undefined) throw new Error(`judge asked ${next} times, scripted ${verdicts.length}`);
+				return verdict;
+			},
+		};
+		return { judge, inputs };
+	}
+
+	describe("retrieval-backed admission", () => {
+		it("hands the judge the nearest memories and supersedes the one it names", async () => {
+			const { judge, inputs } = scriptedJudge([{ verdict: "new" }, { verdict: "supersedes", id: 0 }]);
+			const admission = createRetrievalAdmission({ judge });
+			const { memory, faux, root, harness } = await openHarness({ compaction: "none", admission }, conceptEmbedder);
+			await run(root, faux, [
+				toolCall("memory_note", { content: "prefers brevity" }),
+				toolCall("memory_note", { content: "prefers detail" }),
+				fauxAssistantMessage("Ok."),
+			]);
+			expect(await toolResults(root)).toEqual([
+				{ text: "Saved as #0 in agent:a.", isError: false },
+				{ text: "Saved as #1 in agent:a.", isError: false },
+			]);
+			expect((await (await memory("agent:a")).wake()).items).toEqual([{ type: "memory", id: 1, createdAt: expect.any(Number), content: "prefers detail" }]);
+			expect(inputs).toEqual([
+				{ candidate: "prefers brevity", neighbors: [], scope: "agent:a", scopes: SCOPES },
+				{ candidate: "prefers detail", neighbors: [{ id: 0, content: "prefers brevity" }], scope: "agent:a", scopes: SCOPES },
+			]);
+			await harness.close(context);
+		});
+
+		it("does not save a duplicate and names the memory it duplicates", async () => {
+			const { judge } = scriptedJudge([{ verdict: "duplicate", of: 0 }]);
+			const admission = createRetrievalAdmission({ judge });
+			const { memory, faux, root, harness } = await openHarness({ compaction: "none", admission }, conceptEmbedder);
+			await (await memory("agent:a")).note({ content: "prefers brevity", createdAt: 1 });
+			await run(root, faux, [toolCall("memory_note", { content: "likes short answers" }), fauxAssistantMessage("Ok.")]);
+			expect(await toolResults(root)).toEqual([{ text: "Not saved: duplicate of #0", isError: false }]);
+			expect((await (await memory("agent:a")).wake()).total).toBe(1);
+			await harness.close(context);
+		});
+
+		it("stores a plain new memory when the judge names an id it was not shown", async () => {
+			const { judge, inputs } = scriptedJudge([{ verdict: "supersedes", id: 99 }]);
+			const admission = createRetrievalAdmission({ judge });
+			const { memory, store, faux, root, harness } = await openHarness({ compaction: "none", admission }, conceptEmbedder);
+			await (await memory("agent:a")).note({ content: "prefers brevity", createdAt: 1 });
+			await run(root, faux, [toolCall("memory_note", { content: "prefers detail" }), fauxAssistantMessage("Ok.")]);
+			expect(inputs.map((input) => input.neighbors)).toEqual([[{ id: 0, content: "prefers brevity" }]]);
+			expect(await toolResults(root)).toEqual([{ text: "Saved as #1 in agent:a.", isError: false }]);
+			expect(await (await store("agent:a")).getMemories({ startId: 0, endId: 1 })).toEqual([
+				{ id: 0, createdAt: 1, content: "prefers brevity" },
+				{ id: 1, createdAt: expect.any(Number), content: "prefers detail", sourceId: expect.any(String) },
+			]);
+			await harness.close(context);
+		});
 	});
 
 	it("returns the length error for a note over 280 bytes and writes nothing", async () => {

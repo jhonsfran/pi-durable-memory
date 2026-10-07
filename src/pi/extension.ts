@@ -4,6 +4,7 @@ import { defineExtension, defineTool, section } from "@earendil-works/pi-durable
 import type { Extension, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong } from "../core/errors.js";
 import { formatMemoryContext, formatMemoryItems } from "../core/format.js";
+import type { Memory } from "../core/types.js";
 import { createMemoryCompactionTask } from "./compaction-task.js";
 import type { MemoryResolver } from "./compaction-task.js";
 
@@ -13,10 +14,18 @@ export interface AdmissionInput {
 	readonly scope: string;
 	readonly scopes: readonly string[];
 	readonly conversationId: string;
+	/** The memory of `scope`, so an admission can look at what is already remembered there. */
+	readonly memory: Memory;
 }
 
 export type AdmissionDecision =
-	| { readonly admit: true; readonly content?: string | undefined; readonly scope?: string | undefined }
+	| {
+			readonly admit: true;
+			readonly content?: string | undefined;
+			readonly scope?: string | undefined;
+			/** Id of a memory in the `memory` the admission saw that the new one replaces. Not meaningful together with a rewritten `scope`. */
+			readonly supersedes?: number | undefined;
+	  }
 	| { readonly admit: false; readonly reason: string };
 
 export interface MemoryAdmission {
@@ -121,11 +130,18 @@ export function createPiMemoryExtension(options: PiMemoryExtensionOptions): Exte
 			execute: async (args, api, context) => {
 				const scopes = await scopesOf(api.conversationId);
 				const requested = selectScope(scopes, args.scope);
-				const decision = await admission.evaluate({ content: args.content, scope: requested, scopes, conversationId: String(api.conversationId) });
+				const requestedMemory = await options.memory(requested);
+				const decision = await admission.evaluate({
+					content: args.content,
+					scope: requested,
+					scopes,
+					conversationId: String(api.conversationId),
+					memory: requestedMemory,
+				});
 				if (!decision.admit) return text(`Not saved: ${decision.reason}`);
 				const scope = selectScope(scopes, decision.scope ?? requested);
-				const memory = await options.memory(scope);
-				const { id } = await memory.note({ content: decision.content ?? args.content, sourceId: String(api.taskId) });
+				const memory = scope === requested ? requestedMemory : await options.memory(scope);
+				const { id } = await memory.note({ content: decision.content ?? args.content, sourceId: String(api.taskId), supersedes: decision.supersedes });
 				switch (compaction) {
 					case "task":
 						await api.createTask(compactionTask, { scope }, { ownership: { kind: "conversation" }, background: true }, context);

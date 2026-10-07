@@ -18,6 +18,8 @@ const DEFAULT_LIMITS: MemoryLimits = { maxEntryBytes: 280, rawThreshold: 16, max
 const DEFAULT_RECALL_LIMIT = 10;
 /** Reciprocal rank fusion constant: `score = sum of 1 / (RRF_K + rank)` over the lists a key appears in. */
 const RRF_K = 60;
+/** Stored as the summary of a block whose every memory was superseded, so the summarizer never sees an empty block. */
+const SUPERSEDED_BLOCK_SUMMARY = "(every memory in this block was superseded)";
 
 const encoder = new TextEncoder();
 
@@ -196,7 +198,7 @@ export function createMemory({ store, summarizer, index, limits }: CreateMemoryO
 				for (let have = await store.levelLength(level); have < needed && merged < maxMerges; have++) {
 					const block = blockAt(level, have * size);
 					const items = await summarizeInputs(level, block);
-					const raw = await summarizer.summarize({ ...block, items, maxBytes: maxEntryBytes });
+					const raw = items.length === 0 ? SUPERSEDED_BLOCK_SUMMARY : await summarizer.summarize({ ...block, items, maxBytes: maxEntryBytes });
 					const summary = truncateUtf8(normalizeEntry(raw), maxEntryBytes);
 					// Indexed before `putNode` so a failed upsert leaves the node unbuilt and the host's retry redoes both.
 					await index?.upsert([{ key: { kind: "node", level, startId: block.startId }, text: summary }]);
