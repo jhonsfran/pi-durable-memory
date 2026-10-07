@@ -72,8 +72,10 @@ export function cover(total: number, budget: number): MemoryRange[] {
 	// is spent on the newest blocks, where detail is worth most.
 	while (out.length < budget) {
 		let i = out.length - 1;
+		// biome-ignore lint/style/noNonNullAssertion: `i` is bounds-checked by the loop condition
 		while (i >= 0 && out[i]![1] - out[i]![0] === 1) i--;
 		if (i < 0) break;
+		// biome-ignore lint/style/noNonNullAssertion: `i >= 0` was checked on the previous line
 		const [blockLo, blockHi] = out[i]!;
 		const mid = (blockLo + blockHi) / 2;
 		out.splice(i, 1, [blockLo, mid], [mid, blockHi]);
