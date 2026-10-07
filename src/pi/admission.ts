@@ -54,7 +54,7 @@ export function createRetrievalAdmission(options: { readonly judge: AdmissionJud
 	const limit = options.neighbors ?? DEFAULT_NEIGHBORS;
 	return {
 		async evaluate({ content, memory, scope, scopes }) {
-			const hits = await memory.recall(content, { limit });
+			const hits = await memory.recall(content, { limit, match: "any" });
 			const neighbors = hits.map((hit): AdmissionNeighbor => ({ id: hit.id, content: hit.content }));
 			const verdict = await options.judge.judge({ candidate: content, neighbors, scope, scopes });
 			return decide(verdict, neighbors);

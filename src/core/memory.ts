@@ -122,7 +122,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		},
 
 		async recall(query, options) {
-			const entries = await store.searchMemories(query, options?.limit ?? DEFAULT_RECALL_LIMIT);
+			const entries = await store.searchMemories(query, options?.limit ?? DEFAULT_RECALL_LIMIT, options?.match ?? "all");
 			// Superseded memories are dropped after the search, so the result can hold fewer than `limit` entries.
 			return entries.filter(live);
 		},

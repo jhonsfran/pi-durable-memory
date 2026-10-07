@@ -1,4 +1,4 @@
-import type { MemoryEntry, MemoryNode, MemoryStore } from "../core/types.js";
+import type { MemoryEntry, MemoryNode, MemoryStore, RecallMatch } from "../core/types.js";
 import type { SqlDatabase, SqlExecutor } from "./database.js";
 
 const SCHEMA = `
@@ -59,7 +59,16 @@ const toNode = (row: NodeRow): MemoryNode => ({ level: row.level, startId: row.s
 const tokens = (query: string): string[] => query.split(/\s+/).filter((token) => token.length > 0);
 
 /** Each token as a quoted FTS5 phrase, so user text is never read as FTS syntax. */
-const ftsExpression = (words: readonly string[]): string => words.map((word) => `"${word.replaceAll('"', '""')}"`).join(" AND ");
+const ftsExpression = (words: readonly string[], match: RecallMatch): string =>
+	words.map((word) => `"${word.replaceAll('"', '""')}"`).join(match === "all" ? " AND " : " OR ");
+
+/** Under `any`, words shorter than 3 characters are stop-word noise once a longer word exists. */
+function searchWords(query: string, match: RecallMatch): string[] {
+	const words = tokens(query);
+	if (match === "all") return words;
+	const long = words.filter((word) => word.length >= 3);
+	return long.length > 0 ? long : words;
+}
 
 const likePattern = (word: string): string => `%${word.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
 
@@ -97,23 +106,39 @@ export async function createSqliteMemoryStore(db: SqlDatabase, options: { readon
 	await migrateSupersedes(db);
 	const searchMode = await detectSearchMode(db);
 
-	const search: Record<SearchMode, (words: string[], limit: number) => Promise<MemoryRow[]>> = {
-		fts: (words, limit) =>
+	const search: Record<SearchMode, (words: string[], limit: number, match: RecallMatch) => Promise<MemoryRow[]>> = {
+		// `rank` is FTS5's bm25 score, smallest first; `all` keeps newest first so every match is equal.
+		fts: (words, limit, match) =>
 			db.all<MemoryRow>(
 				`SELECT ${MEMORY_COLUMNS} FROM memories_fts
 				JOIN memories m ON m.scope = memories_fts.scope AND m.id = memories_fts.id ${SUPERSEDED_JOIN}
-				WHERE memories_fts MATCH ? AND memories_fts.scope = ? GROUP BY m.id ORDER BY m.id DESC LIMIT ?`,
-				ftsExpression(words),
+				WHERE memories_fts MATCH ? AND memories_fts.scope = ? GROUP BY m.id
+				ORDER BY ${match === "all" ? "m.id DESC" : "memories_fts.rank, m.id DESC"} LIMIT ?`,
+				ftsExpression(words, match),
 				scope,
 				limit,
 			),
-		like: (words, limit) =>
-			db.all<MemoryRow>(
-				`SELECT ${MEMORY_COLUMNS} FROM ${MEMORY_FROM} WHERE m.scope = ?${" AND m.content LIKE ? ESCAPE '\\'".repeat(words.length)} GROUP BY m.id ORDER BY m.id DESC LIMIT ?`,
+		like: (words, limit, match) => {
+			const term = "m.content LIKE ? ESCAPE '\\'";
+			const patterns = words.map(likePattern);
+			if (match === "all") {
+				return db.all<MemoryRow>(
+					`SELECT ${MEMORY_COLUMNS} FROM ${MEMORY_FROM} WHERE m.scope = ?${` AND ${term}`.repeat(words.length)} GROUP BY m.id ORDER BY m.id DESC LIMIT ?`,
+					scope,
+					...patterns,
+					limit,
+				);
+			}
+			// The score is a plain sum, not SUM(): the superseded join can repeat a memory's row per replacer.
+			const score = words.map(() => `(CASE WHEN ${term} THEN 1 ELSE 0 END)`).join(" + ");
+			return db.all<MemoryRow>(
+				`SELECT ${MEMORY_COLUMNS} FROM ${MEMORY_FROM} WHERE m.scope = ? AND (${words.map(() => term).join(" OR ")}) GROUP BY m.id ORDER BY ${score} DESC, m.id DESC LIMIT ?`,
 				scope,
-				...words.map(likePattern),
+				...patterns,
+				...patterns,
 				limit,
-			),
+			);
+		},
 	};
 
 	return {
@@ -162,10 +187,10 @@ export async function createSqliteMemoryStore(db: SqlDatabase, options: { readon
 			return rows.map(toEntry);
 		},
 
-		async searchMemories(query, limit) {
-			const words = tokens(query);
+		async searchMemories(query, limit, match) {
+			const words = searchWords(query, match);
 			if (words.length === 0) return [];
-			const rows = await search[searchMode](words, limit);
+			const rows = await search[searchMode](words, limit, match);
 			return rows.map(toEntry);
 		},
 

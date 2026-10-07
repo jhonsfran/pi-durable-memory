@@ -16,6 +16,7 @@ export type {
 	MemoryStore,
 	MemorySummarizer,
 	NoteInput,
+	RecallMatch,
 	RecallOptions,
 	SummarizeInput,
 	WakeOptions,

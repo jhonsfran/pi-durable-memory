@@ -103,5 +103,17 @@ describe("sqlite store", () => {
 			expect(await memory.recall("cloud OR nothing")).toEqual([]);
 			expect(await memory.recall("   ")).toEqual([]);
 		});
+
+		it("match any returns memories sharing one word, most shared words first", async () => {
+			const { memory } = await openFixture({ db: wrap(openNodeSqlite(":memory:")) });
+			await memory.note({ content: "User prefers concise answers.", createdAt: 1 });
+			await memory.note({ content: "Deploys need approval.", createdAt: 2 });
+			await memory.note({ content: "User prefers detailed answers on billing.", createdAt: 3 });
+			expect(await memory.recall("user prefers detailed answers", { match: "any" })).toEqual([
+				{ id: 2, createdAt: 3, content: "User prefers detailed answers on billing." },
+				{ id: 0, createdAt: 1, content: "User prefers concise answers." },
+			]);
+			expect(await memory.recall("user prefers detailed answers")).toEqual([{ id: 2, createdAt: 3, content: "User prefers detailed answers on billing." }]);
+		});
 	});
 });

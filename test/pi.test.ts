@@ -194,18 +194,20 @@ describe("pi extension", () => {
 			const admission = createRetrievalAdmission({ judge });
 			const { memory, faux, root, harness } = await openHarness({ admission });
 			await run(root, faux, [
-				toolCall("memory_note", { content: "prefers brevity, detail only on request" }),
-				toolCall("memory_note", { content: "prefers detail" }),
+				toolCall("memory_note", { content: "User prefers concise answers." }),
+				toolCall("memory_note", { content: "User prefers detailed answers." }),
 				fauxAssistantMessage("Ok."),
 			]);
 			expect(await toolResults(root)).toEqual([
 				{ text: "Saved as #0 in agent:a.", isError: false },
 				{ text: "Saved as #1 in agent:a.", isError: false },
 			]);
-			expect((await (await memory("agent:a")).wake()).items).toEqual([{ type: "memory", id: 1, createdAt: expect.any(Number), content: "prefers detail" }]);
+			expect((await (await memory("agent:a")).wake()).items).toEqual([
+				{ type: "memory", id: 1, createdAt: expect.any(Number), content: "User prefers detailed answers." },
+			]);
 			expect(inputs).toEqual([
-				{ candidate: "prefers brevity, detail only on request", neighbors: [], scope: "agent:a", scopes: SCOPES },
-				{ candidate: "prefers detail", neighbors: [{ id: 0, content: "prefers brevity, detail only on request" }], scope: "agent:a", scopes: SCOPES },
+				{ candidate: "User prefers concise answers.", neighbors: [], scope: "agent:a", scopes: SCOPES },
+				{ candidate: "User prefers detailed answers.", neighbors: [{ id: 0, content: "User prefers concise answers." }], scope: "agent:a", scopes: SCOPES },
 			]);
 			await harness.close(context);
 		});
@@ -214,8 +216,8 @@ describe("pi extension", () => {
 			const { judge } = scriptedJudge([{ verdict: "duplicate", of: 0 }]);
 			const admission = createRetrievalAdmission({ judge });
 			const { memory, faux, root, harness } = await openHarness({ admission });
-			await (await memory("agent:a")).note({ content: "prefers brevity, detail only on request", createdAt: 1 });
-			await run(root, faux, [toolCall("memory_note", { content: "prefers brevity" }), fauxAssistantMessage("Ok.")]);
+			await (await memory("agent:a")).note({ content: "User prefers concise answers.", createdAt: 1 });
+			await run(root, faux, [toolCall("memory_note", { content: "User prefers concise answers." }), fauxAssistantMessage("Ok.")]);
 			expect(await toolResults(root)).toEqual([{ text: "Not saved: duplicate of #0", isError: false }]);
 			expect((await (await memory("agent:a")).wake()).total).toBe(1);
 			await harness.close(context);
@@ -225,13 +227,13 @@ describe("pi extension", () => {
 			const { judge, inputs } = scriptedJudge([{ verdict: "supersedes", id: 99 }]);
 			const admission = createRetrievalAdmission({ judge });
 			const { memory, store, faux, root, harness } = await openHarness({ admission });
-			await (await memory("agent:a")).note({ content: "prefers brevity, detail only on request", createdAt: 1 });
-			await run(root, faux, [toolCall("memory_note", { content: "prefers detail" }), fauxAssistantMessage("Ok.")]);
-			expect(inputs.map((input) => input.neighbors)).toEqual([[{ id: 0, content: "prefers brevity, detail only on request" }]]);
+			await (await memory("agent:a")).note({ content: "User prefers concise answers.", createdAt: 1 });
+			await run(root, faux, [toolCall("memory_note", { content: "User prefers detailed answers." }), fauxAssistantMessage("Ok.")]);
+			expect(inputs.map((input) => input.neighbors)).toEqual([[{ id: 0, content: "User prefers concise answers." }]]);
 			expect(await toolResults(root)).toEqual([{ text: "Saved as #1 in agent:a.", isError: false }]);
 			expect(await (await store("agent:a")).getMemories({ startId: 0, endId: 1 })).toEqual([
-				{ id: 0, createdAt: 1, content: "prefers brevity, detail only on request" },
-				{ id: 1, createdAt: expect.any(Number), content: "prefers detail", sourceId: expect.any(String) },
+				{ id: 0, createdAt: 1, content: "User prefers concise answers." },
+				{ id: 1, createdAt: expect.any(Number), content: "User prefers detailed answers.", sourceId: expect.any(String) },
 			]);
 			await harness.close(context);
 		});

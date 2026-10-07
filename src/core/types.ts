@@ -68,9 +68,14 @@ export interface WakeOptions {
 	readonly maxItems?: number | undefined;
 }
 
+/** `all`: every query word must match. `any`: one word is enough, best match first. */
+export type RecallMatch = "all" | "any";
+
 export interface RecallOptions {
 	/** Defaults to 10. */
 	readonly limit?: number | undefined;
+	/** Defaults to `all`. */
+	readonly match?: RecallMatch | undefined;
 }
 
 export interface CompactOptions {
@@ -108,7 +113,7 @@ export interface MemorySummarizer {
 export interface Memory {
 	note(input: NoteInput): Promise<MemoryEntry>;
 	wake(options?: WakeOptions): Promise<MemoryContext>;
-	/** Memories whose text contains every word of the query, newest first. Superseded memories are excluded. */
+	/** Memories whose text contains every word of the query, newest first; with `match: "any"`, memories containing at least one word, best match first. Superseded memories are excluded. */
 	recall(query: string, options?: RecallOptions): Promise<MemoryEntry[]>;
 	/** The two halves of one block, each rendered as `wake()` renders it. Throws `InvalidRange` for a range that is not an aligned block inside the log. */
 	zoom(range: MemoryRange): Promise<MemoryItem[]>;
@@ -137,8 +142,8 @@ export interface MemoryStore {
 	}): Promise<MemoryEntry>;
 	/** Entries with ids in the range, ascending. Ids beyond the log are simply absent. */
 	getMemories(range: MemoryRange): Promise<MemoryEntry[]>;
-	/** Full-text matches, newest first. Superseded memories are included; the core filters. */
-	searchMemories(query: string, limit: number): Promise<MemoryEntry[]>;
+	/** Full-text matches: every word, newest first, for `all`; at least one word, best match first, for `any`. Superseded memories are included; the core filters. */
+	searchMemories(query: string, limit: number, match: RecallMatch): Promise<MemoryEntry[]>;
 	getNodes(keys: ReadonlyArray<{ readonly level: number; readonly startId: number }>): Promise<MemoryNode[]>;
 	/** False when a node with the same `(level, startId)` already exists; the existing node is kept. */
 	putNode(node: MemoryNode): Promise<boolean>;
