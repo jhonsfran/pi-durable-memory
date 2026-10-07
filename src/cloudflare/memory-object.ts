@@ -6,9 +6,9 @@ import { durableObjectSql } from "./sql.js";
 
 export interface MemoryObjectOptions<Env> {
 	readonly summarizer: (env: Env) => MemorySummarizer;
-	readonly limits?: Partial<MemoryLimits>;
+	readonly limits?: Partial<MemoryLimits> | undefined;
 	/** Merges per alarm run before rescheduling. Default 32. */
-	readonly mergesPerAlarm?: number;
+	readonly mergesPerAlarm?: number | undefined;
 }
 
 /** What a stub of the Durable Object exposes over RPC: the `Memory` interface. */
@@ -31,7 +31,7 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 
 		private open(): Promise<Memory> {
 			this.memory ??= createSqliteMemoryStore(durableObjectSql(this.ctx.storage), { scope: SCOPE }).then(
-				(store) => createMemory({ store, summarizer: options.summarizer(this.env), ...(options.limits ? { limits: options.limits } : {}) }),
+				(store) => createMemory({ store, summarizer: options.summarizer(this.env), limits: options.limits }),
 				(error: unknown) => {
 					this.memory = undefined;
 					throw error;

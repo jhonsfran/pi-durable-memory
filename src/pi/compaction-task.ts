@@ -7,11 +7,12 @@ const BATCH = 8;
 
 /**
  * Compacts one scope in batches of `BATCH` merges, one batch per invocation. Tasks are looked up by name from the
- * registry, so the definition is built per extension to close over the host's memory resolver.
+ * registry, so the definition is built per extension to close over the host's memory resolver, and named after the
+ * extension so two extensions in one registry do not collide.
  */
-export function createMemoryCompactionTask(memory: MemoryResolver) {
+export function createMemoryCompactionTask(memory: MemoryResolver, extensionName: string) {
 	return defineTask<{ scope: string }, { phase: "run"; merged: number }, { merged: number }>({
-		name: "memory.compact",
+		name: `${extensionName}.compact`,
 		version: 1,
 		initial: () => ({ phase: "run", merged: 0 }),
 		phases: {

@@ -109,7 +109,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 			const content = normalizeEntry(input.content);
 			const bytes = byteLength(content);
 			if (bytes > maxEntryBytes) throw new MemoryEntryTooLong(bytes, maxEntryBytes);
-			return store.appendMemory({ content, createdAt: input.createdAt ?? Date.now(), ...(input.sourceId === undefined ? {} : { sourceId: input.sourceId }) });
+			return store.appendMemory({ content, createdAt: input.createdAt ?? Date.now(), sourceId: input.sourceId });
 		},
 
 		async wake(options) {

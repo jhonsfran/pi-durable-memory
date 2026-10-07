@@ -3,12 +3,12 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Harness, MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
-import type { Conversation, ToolExecutionApi, ToolRegistration } from "@earendil-works/pi-durable";
+import type { Conversation } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import { createMemory } from "../src/index.js";
 import type { Memory } from "../src/index.js";
 import { createPiMemoryExtension } from "../src/pi/index.js";
-import type { PiMemoryExtensionOptions } from "../src/pi/index.js";
+import type { MemoryAdmission, PiMemoryExtensionOptions } from "../src/pi/index.js";
 import { createSqliteMemoryStore } from "../src/sqlite/index.js";
 import { openNodeSqlite } from "../src/sqlite/node.js";
 import { joinSummarizer } from "./helpers.js";
@@ -109,17 +109,6 @@ describe("pi extension", () => {
 		await harness.close(context);
 	});
 
-	it("a replayed memory_note returns the same entry instead of appending", async () => {
-		const memory = scopedMemories();
-		const { tools } = createPiMemoryExtension({ memory, scopes: () => SCOPES, compaction: "none" });
-		const note = tools?.find((tool) => tool.name === "memory_note") as ToolRegistration<never>;
-		const api = { taskId: 7, conversationId: 0 } as unknown as ToolExecutionApi;
-		const args = { content: "Deploys go through CI only." } as never;
-		expect(await note.execute(args, api, context)).toEqual({ content: [{ type: "text", text: "Saved as #0 in agent:a." }], isError: false });
-		expect(await note.execute(args, api, context)).toEqual({ content: [{ type: "text", text: "Saved as #0 in agent:a." }], isError: false });
-		expect((await (await memory("agent:a")).wake()).total).toBe(1);
-	});
-
 	it("runs the compaction task after a note", async () => {
 		const { memory, faux, root, harness } = await openHarness({ compaction: "task" });
 		await run(root, faux, [
@@ -175,6 +164,31 @@ describe("pi extension", () => {
 			{ text: "[agent:a]\n#0 likes tabs\n\n[project:x]\n#0 tabs not spaces", isError: false },
 			{ text: "No match.", isError: false },
 		]);
+		await harness.close(context);
+	});
+
+	it("memory_note returns the admission reason and writes nothing when admission rejects", async () => {
+		const admission: MemoryAdmission = {
+			evaluate: ({ content }) => (content.includes("hello") ? { admit: false, reason: "greetings are not memories." } : { admit: true }),
+		};
+		const { memory, faux, root, harness } = await openHarness({ compaction: "none", admission });
+		await run(root, faux, [toolCall("memory_note", { content: "hello there" }), fauxAssistantMessage("Ok.")]);
+		expect(await toolResults(root)).toEqual([{ text: "Not saved: greetings are not memories.", isError: false }]);
+		expect((await (await memory("agent:a")).wake()).total).toBe(0);
+		await harness.close(context);
+	});
+
+	it("memory_note stores the content and scope an admission rewrites", async () => {
+		const admission: MemoryAdmission = {
+			evaluate: ({ content }) => ({ admit: true, content: content.toUpperCase(), scope: "project:x" }),
+		};
+		const { memory, faux, root, harness } = await openHarness({ compaction: "none", admission });
+		await run(root, faux, [toolCall("memory_note", { content: "deploys go through ci" }), fauxAssistantMessage("Ok.")]);
+		expect(await toolResults(root)).toEqual([{ text: "Saved as #0 in project:x.", isError: false }]);
+		expect((await (await memory("project:x")).wake()).items).toEqual([
+			{ type: "memory", id: 0, createdAt: expect.any(Number), content: "DEPLOYS GO THROUGH CI" },
+		]);
+		expect((await (await memory("agent:a")).wake()).total).toBe(0);
 		await harness.close(context);
 	});
 

@@ -52,24 +52,24 @@ export interface MemoryContext {
 export interface NoteInput {
 	readonly content: string;
 	/** When set, a second `note()` with the same `sourceId` returns the first entry instead of appending. */
-	readonly sourceId?: string;
+	readonly sourceId?: string | undefined;
 	/** Milliseconds since epoch. Defaults to now. */
-	readonly createdAt?: number;
+	readonly createdAt?: number | undefined;
 }
 
 export interface WakeOptions {
 	/** Upper bound on `MemoryContext.items.length`. Defaults to `MemoryLimits.maxItems`. */
-	readonly maxItems?: number;
+	readonly maxItems?: number | undefined;
 }
 
 export interface RecallOptions {
 	/** Defaults to 10. */
-	readonly limit?: number;
+	readonly limit?: number | undefined;
 }
 
 export interface CompactOptions {
 	/** Stop after this many merges. Defaults to all pending merges. */
-	readonly maxMerges?: number;
+	readonly maxMerges?: number | undefined;
 }
 
 export interface CompactResult {
@@ -123,7 +123,7 @@ export interface Memory {
 export interface MemoryStore {
 	count(): Promise<number>;
 	/** Append at position `count()`, or return the existing entry with the same `sourceId`. Atomic. */
-	appendMemory(input: { readonly content: string; readonly sourceId?: string; readonly createdAt: number }): Promise<MemoryEntry>;
+	appendMemory(input: { readonly content: string; readonly sourceId?: string | undefined; readonly createdAt: number }): Promise<MemoryEntry>;
 	/** Entries with ids in the range, ascending. Ids beyond the log are simply absent. */
 	getMemories(range: MemoryRange): Promise<MemoryEntry[]>;
 	/** Full-text matches, newest first. */
@@ -140,5 +140,5 @@ export interface MemoryStore {
 export interface CreateMemoryOptions {
 	readonly store: MemoryStore;
 	readonly summarizer: MemorySummarizer;
-	readonly limits?: Partial<MemoryLimits>;
+	readonly limits?: Partial<MemoryLimits> | undefined;
 }

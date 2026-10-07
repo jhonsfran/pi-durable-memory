@@ -29,7 +29,7 @@ export async function openFixture(
 	const db = options.db ?? openNodeSqlite(":memory:");
 	const base = await createSqliteMemoryStore(db, { scope: options.scope ?? "test" });
 	const store = options.store ? options.store(base) : base;
-	const memory = createMemory({ store, summarizer: options.summarizer ?? joinSummarizer, ...(options.limits ? { limits: options.limits } : {}) });
+	const memory = createMemory({ store, summarizer: options.summarizer ?? joinSummarizer, limits: options.limits });
 	return { db, store, memory };
 }
 
