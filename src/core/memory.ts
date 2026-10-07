@@ -100,6 +100,46 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		return count;
 	}
 
+	/** The first block compaction would build now: levels ascending, then position. Nodes form a dense prefix per level, so `levelLength` is the cursor. */
+	async function nextPendingBlock(total: number): Promise<MemoryRange | undefined> {
+		for (let level = 1; 2 ** level <= total; level++) {
+			const size = 2 ** level;
+			const have = await store.levelLength(level);
+			if (have < Math.floor(total / size)) return blockAt(level, have * size);
+		}
+		return undefined;
+	}
+
+	/**
+	 * `nextMerge()` plus the number of blocks it settled on its own. A block whose every memory was
+	 * superseded is stored with the fixed summary here instead of being returned: it needs no model,
+	 * and a caller should never see an empty block. `budget` caps those so `compact()` honors
+	 * `maxMerges`. A lost `putNode` race is left for the next read of the cursor to see.
+	 */
+	async function nextPending(budget: number): Promise<{ input: SummarizeInput | undefined; fixed: number }> {
+		const total = await store.count();
+		let fixed = 0;
+		let lost: string | undefined;
+		while (fixed < budget) {
+			const block = await nextPendingBlock(total);
+			if (block === undefined) break;
+			const level = blockLevel(block);
+			const key = nodeKey(level, block.startId);
+			// A lost race leaves the node present, so the cursor moves on. If it did not, the store broke its contract; stop rather than spin.
+			if (key === lost) break;
+			const items = await summarizeInputs(level, block);
+			if (items.length > 0) return { input: { ...block, items, maxBytes: maxEntryBytes }, fixed };
+			if (await store.putNode({ level, ...block, summary: SUPERSEDED_BLOCK_SUMMARY })) fixed++;
+			else lost = key;
+		}
+		return { input: undefined, fixed };
+	}
+
+	async function commitMerge(range: MemoryRange, summary: string): Promise<boolean> {
+		assertBlock(range);
+		return store.putNode({ level: blockLevel(range), startId: range.startId, endId: range.endId, summary: truncateUtf8(normalizeEntry(summary), maxEntryBytes) });
+	}
+
 	return {
 		async note(input) {
 			const content = normalizeEntry(input.content);
@@ -136,25 +176,30 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 
 		async compact(options) {
 			const maxMerges = options?.maxMerges ?? Number.POSITIVE_INFINITY;
-			const total = await store.count();
 			let merged = 0;
-			for (let level = 1; 2 ** level <= total && merged < maxMerges; level++) {
-				const size = 2 ** level;
-				const needed = Math.floor(total / size);
-				for (let have = await store.levelLength(level); have < needed && merged < maxMerges; have++) {
-					const block = blockAt(level, have * size);
-					const items = await summarizeInputs(level, block);
-					const raw = items.length === 0 ? SUPERSEDED_BLOCK_SUMMARY : await summarizer.summarize({ ...block, items, maxBytes: maxEntryBytes });
-					const summary = truncateUtf8(normalizeEntry(raw), maxEntryBytes);
-					if (await store.putNode({ level, ...block, summary })) merged++;
-				}
+			let lost: string | undefined;
+			while (summarizer !== undefined && merged < maxMerges) {
+				const { input, fixed } = await nextPending(maxMerges - merged);
+				merged += fixed;
+				if (input === undefined || merged >= maxMerges) break;
+				const key = nodeKey(blockLevel(input), input.startId);
+				// Same guard as `nextPending`: a lost commit must have left the node present, or the store broke its contract.
+				if (key === lost) break;
+				if (await commitMerge(input, await summarizer.summarize(input))) merged++;
+				else lost = key;
 			}
-			return { merged, pending: await pendingCount(total) };
+			return { merged, pending: await pendingCount(await store.count()) };
 		},
 
 		async pending() {
 			return pendingCount(await store.count());
 		},
+
+		async nextMerge() {
+			return (await nextPending(Number.POSITIVE_INFINITY)).input;
+		},
+
+		commitMerge,
 
 		async forget(range) {
 			assertBlock(range);

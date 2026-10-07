@@ -28,7 +28,8 @@ export async function openFixture(
 		scope?: string;
 		db?: SqlDatabase;
 		store?: (store: MemoryStore) => MemoryStore;
-		summarizer?: MemorySummarizer;
+		/** Defaults to `joinSummarizer`; `null` opens the memory without one. */
+		summarizer?: MemorySummarizer | null;
 		limits?: Partial<MemoryLimits>;
 	} = {},
 ): Promise<Fixture> {
@@ -36,7 +37,8 @@ export async function openFixture(
 	const scope = options.scope ?? "test";
 	const base = await createSqliteMemoryStore(db, { scope });
 	const store = options.store ? options.store(base) : base;
-	const memory = createMemory({ store, summarizer: options.summarizer ?? joinSummarizer, limits: options.limits });
+	const summarizer = options.summarizer === null ? undefined : (options.summarizer ?? joinSummarizer);
+	const memory = createMemory({ store, summarizer, limits: options.limits });
 	return { db, store, memory };
 }
 

@@ -73,4 +73,28 @@ describe("memory Durable Object", () => {
 		await compacted(stub);
 		expect(await stub.zoom({ startId: 0, endId: 7 })).toEqual(summaries);
 	});
+
+	it("without a summarizer schedules no alarm and stores the summaries the client commits", async () => {
+		const stub = env.MEMORY_CLIENT.get(env.MEMORY_CLIENT.idFromName("client"));
+		await noteMany(stub, 4);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(await stub.pending()).toBe(3);
+		expect(await stub.nextMerge()).toEqual({
+			startId: 0,
+			endId: 1,
+			items: [
+				{ startId: 0, endId: 0, content: "m0" },
+				{ startId: 1, endId: 1, content: "m1" },
+			],
+			maxBytes: 280,
+		});
+		for (let input = await stub.nextMerge(); input !== undefined; input = await stub.nextMerge()) {
+			expect(await stub.commitMerge(input, `client ${input.startId}-${input.endId}`)).toBe(true);
+		}
+		expect(await stub.pending()).toBe(0);
+		expect((await stub.wake({ maxItems: 2 })).items).toEqual([
+			{ type: "summary", startId: 0, endId: 1, content: "client 0-1" },
+			{ type: "summary", startId: 2, endId: 3, content: "client 2-3" },
+		]);
+	});
 });

@@ -4,7 +4,13 @@
 	// The newest date the workerd bundled with @cloudflare/vitest-pool-workers 0.22.0 accepts.
 	"compatibility_date": "2026-08-22",
 	"durable_objects": {
-		"bindings": [{ "name": "MEMORY", "class_name": "MemoryObject" }]
+		"bindings": [
+			{ "name": "MEMORY", "class_name": "MemoryObject" },
+			{ "name": "MEMORY_CLIENT", "class_name": "ClientSummarizedObject" }
+		]
 	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MemoryObject"] }]
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["MemoryObject"] },
+		{ "tag": "v2", "new_sqlite_classes": ["ClientSummarizedObject"] }
+	]
 }

@@ -5,7 +5,12 @@ import { createSqliteMemoryStore } from "../sqlite/store.js";
 import { durableObjectSql } from "./sql.js";
 
 export interface MemoryObjectOptions<Env> {
-	readonly summarizer: (env: Env) => MemorySummarizer;
+	/**
+	 * Writes summaries from the alarm scheduled after every write. Without one, no alarm is
+	 * scheduled and clients summarize through `nextMerge()` and `commitMerge()`, which the MCP
+	 * server exposes.
+	 */
+	readonly summarizer?: ((env: Env) => MemorySummarizer) | undefined;
 	readonly limits?: Partial<MemoryLimits> | undefined;
 	/** Merges per alarm run before rescheduling. Default 32. */
 	readonly mergesPerAlarm?: number | undefined;
@@ -20,18 +25,19 @@ export type MemoryObjectClass<Env> = typeof DurableObject<Env> & (new (ctx: Dura
 const SCOPE = "self";
 
 /**
- * A Durable Object class holding one memory scope, named by the scope string. It compacts from an
- * alarm after every write, so callers never run `compact()` themselves.
+ * A Durable Object class holding one memory scope, named by the scope string. With a summarizer it
+ * compacts from an alarm after every write, so callers never run `compact()` themselves.
  */
 export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): MemoryObjectClass<Env> {
 	const mergesPerAlarm = options.mergesPerAlarm ?? 32;
+	const { summarizer } = options;
 
 	return class MemoryObject extends DurableObject<Env> implements Memory {
 		private memory: Promise<Memory> | undefined;
 
 		private open(): Promise<Memory> {
 			this.memory ??= createSqliteMemoryStore(durableObjectSql(this.ctx.storage), { scope: SCOPE }).then(
-				(store) => createMemory({ store, summarizer: options.summarizer(this.env), limits: options.limits }),
+				(store) => createMemory({ store, summarizer: summarizer?.(this.env), limits: options.limits }),
 				(error: unknown) => {
 					this.memory = undefined;
 					throw error;
@@ -47,11 +53,12 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 		 * workerd (no reschedule request is sent) and that alarm never fires again; `+ 1` avoids it.
 		 * `setAlarm()` replaces, so a burst of writes still collapses into one run.
 		 */
-		private scheduleCompaction(): Promise<void> {
-			return this.ctx.storage.setAlarm(Date.now() + 1);
+		private async scheduleCompaction(): Promise<void> {
+			if (summarizer !== undefined) await this.ctx.storage.setAlarm(Date.now() + 1);
 		}
 
 		override async alarm(): Promise<void> {
+			if (summarizer === undefined) return;
 			const memory = await this.open();
 			await memory.compact({ maxMerges: mergesPerAlarm });
 			// Re-read instead of trusting `compact()`'s count: a write that landed during the run is not in it.
@@ -82,6 +89,14 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 
 		async pending() {
 			return (await this.open()).pending();
+		}
+
+		async nextMerge() {
+			return (await this.open()).nextMerge();
+		}
+
+		async commitMerge(range: MemoryRange, summary: string) {
+			return (await this.open()).commitMerge(range, summary);
 		}
 
 		async forget(range: MemoryRange) {

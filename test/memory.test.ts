@@ -263,4 +263,64 @@ describe("memory", () => {
 		expect(node?.summary).toBe(`line one line two ${"é".repeat(131)}`);
 		expect(new TextEncoder().encode(node!.summary).length).toBe(280);
 	});
+
+	it("hands out pending blocks in build order through nextMerge and stores what commitMerge is given", async () => {
+		const { memory, store } = await openFixture();
+		await noteMany(memory, 4);
+		expect(await memory.nextMerge()).toEqual({
+			startId: 0,
+			endId: 1,
+			items: [
+				{ startId: 0, endId: 0, content: "m0" },
+				{ startId: 1, endId: 1, content: "m1" },
+			],
+			maxBytes: 280,
+		});
+		expect(await memory.commitMerge({ startId: 0, endId: 1 }, "first pair")).toBe(true);
+		expect(await memory.nextMerge()).toEqual({
+			startId: 2,
+			endId: 3,
+			items: [
+				{ startId: 2, endId: 2, content: "m2" },
+				{ startId: 3, endId: 3, content: "m3" },
+			],
+			maxBytes: 280,
+		});
+		expect(await memory.commitMerge({ startId: 2, endId: 3 }, "second pair")).toBe(true);
+		expect(await memory.nextMerge()).toEqual({
+			startId: 0,
+			endId: 3,
+			items: [
+				{ startId: 0, endId: 0, content: "m0" },
+				{ startId: 1, endId: 1, content: "m1" },
+				{ startId: 2, endId: 2, content: "m2" },
+				{ startId: 3, endId: 3, content: "m3" },
+			],
+			maxBytes: 280,
+		});
+		expect(await memory.commitMerge({ startId: 0, endId: 3 }, "both pairs")).toBe(true);
+		expect(await memory.nextMerge()).toBeUndefined();
+		expect(await memory.pending()).toBe(0);
+		expect(await memory.commitMerge({ startId: 0, endId: 1 }, "again")).toBe(false);
+		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "first pair" }]);
+		await expect(memory.commitMerge({ startId: 1, endId: 2 }, "x")).rejects.toThrow(InvalidRange);
+	});
+
+	it("without a summarizer compact merges nothing and manual commits fill the pending blocks", async () => {
+		const { memory } = await openFixture({ summarizer: null });
+		await noteMany(memory, 4);
+		expect(await memory.compact()).toEqual({ merged: 0, pending: 3 });
+		expect((await memory.wake({ maxItems: 2 })).items).toEqual([
+			{ type: "pending", startId: 0, endId: 1 },
+			{ type: "pending", startId: 2, endId: 3 },
+		]);
+		for (let input = await memory.nextMerge(); input !== undefined; input = await memory.nextMerge()) {
+			await memory.commitMerge(input, `manual ${input.startId}-${input.endId}`);
+		}
+		expect(await memory.compact()).toEqual({ merged: 0, pending: 0 });
+		expect((await memory.wake({ maxItems: 2 })).items).toEqual([
+			{ type: "summary", startId: 0, endId: 1, content: "manual 0-1" },
+			{ type: "summary", startId: 2, endId: 3, content: "manual 2-3" },
+		]);
+	});
 });

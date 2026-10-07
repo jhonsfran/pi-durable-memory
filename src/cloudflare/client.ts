@@ -12,6 +12,8 @@ export function createMemoryClient(namespace: DurableObjectNamespace<MemoryObjec
 			zoom: (range) => stub.zoom(range),
 			compact: (options) => stub.compact(options),
 			pending: () => stub.pending(),
+			nextMerge: () => stub.nextMerge(),
+			commitMerge: (range, summary) => stub.commitMerge(range, summary),
 			forget: (range) => stub.forget(range),
 		};
 	};

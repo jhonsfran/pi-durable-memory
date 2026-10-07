@@ -9,3 +9,6 @@ export const MemoryObject = defineMemoryObject<Cloudflare.Env>({
 	}),
 	mergesPerAlarm: 2,
 });
+
+/** No summarizer: nothing schedules an alarm, and the test commits summaries itself. */
+export const ClientSummarizedObject = defineMemoryObject<Cloudflare.Env>({});

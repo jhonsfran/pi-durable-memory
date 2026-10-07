@@ -120,6 +120,14 @@ export interface Memory {
 	compact(options?: CompactOptions): Promise<CompactResult>;
 	/** Merges that `compact()` would perform now. */
 	pending(): Promise<number>;
+	/**
+	 * The next block compaction would summarize, with its children, or `undefined` when nothing is
+	 * pending. Together with `commitMerge()` this lets a caller supply the summary itself; `compact()`
+	 * is the same two steps with the injected summarizer in between.
+	 */
+	nextMerge(): Promise<SummarizeInput | undefined>;
+	/** Store the summary for a block `nextMerge()` returned. False when that block is no longer pending. The summary is normalized and truncated like a note. */
+	commitMerge(range: MemoryRange, summary: string): Promise<boolean>;
 	/** Drop one summary and every summary built from it. The next `compact()` rebuilds them. Raw memories are never touched. Returns the number of nodes dropped. */
 	forget(range: MemoryRange): Promise<number>;
 }
@@ -155,6 +163,7 @@ export interface MemoryStore {
 
 export interface CreateMemoryOptions {
 	readonly store: MemoryStore;
-	readonly summarizer: MemorySummarizer;
+	/** Writes summaries in `compact()`. Without one, `compact()` performs no merges and callers summarize through `nextMerge()` and `commitMerge()`. */
+	readonly summarizer?: MemorySummarizer | undefined;
 	readonly limits?: Partial<MemoryLimits> | undefined;
 }

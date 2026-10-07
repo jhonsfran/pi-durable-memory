@@ -19,6 +19,10 @@
     "./jev": {
       "types": "./dist/jev/index.d.ts",
       "import": "./dist/jev/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
     }
   },
   "files": [
@@ -35,7 +39,9 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "^1.0.4",
     "@earendil-works/pi-durable": "^1.0.4",
-    "@typesafe-ai/sdk": "^0.6.0"
+    "@typesafe-ai/sdk": "^0.6.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^3.25 || ^4.0"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {
@@ -46,6 +52,12 @@
     },
     "@typesafe-ai/sdk": {
       "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
     }
   },
   "devDependencies": {
@@ -54,9 +66,11 @@
     "@earendil-works/chord": "^1.0.4",
     "@earendil-works/pi-ai": "^1.0.4",
     "@earendil-works/pi-durable": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@types/node": "^22.18.0",
     "@typesafe-ai/sdk": "^0.6.0",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.0",
+    "zod": "^4.4.3"
   }
 }
