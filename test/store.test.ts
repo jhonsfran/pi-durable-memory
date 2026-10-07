@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SqlDatabase } from "../src/sqlite/index.js";
 import { openNodeSqlite } from "../src/sqlite/node.js";
@@ -10,6 +13,34 @@ function withoutFts(db: SqlDatabase): SqlDatabase {
 		exec: (sql) => (sql.includes("fts5") ? Promise.reject(new Error("no such module: fts5")) : db.exec(sql)),
 	};
 }
+
+describe("node sqlite adapter", () => {
+	it("opens a file database in WAL mode", async () => {
+		const db = openNodeSqlite(join(mkdtempSync(join(tmpdir(), "optmem-")), "memory.db"));
+		expect(await db.get("PRAGMA journal_mode")).toEqual({ journal_mode: "wal" });
+	});
+
+	it("rejects a transaction handle used after the transaction settled", async () => {
+		const db = openNodeSqlite(":memory:");
+		const leaked = await db.transaction(async (tx) => {
+			expect(await tx.get("SELECT 1 AS one")).toEqual({ one: 1 });
+			return tx;
+		});
+		await expect(leaked.get("SELECT 1 AS one")).rejects.toThrow("SQLite transaction handle is no longer active");
+	});
+
+	it("rolls back a transaction that throws, so the next append still takes id 0", async () => {
+		const { db, store } = await openFixture();
+		await expect(
+			db.transaction(async (tx) => {
+				await tx.run("INSERT INTO memories (scope, id, created_at, content, source_id) VALUES ('test', 0, 1, 'lost', NULL)");
+				throw new Error("abort");
+			}),
+		).rejects.toThrow("abort");
+		expect(await store.count()).toBe(0);
+		expect(await store.appendMemory({ content: "kept", createdAt: 2 })).toEqual({ id: 0, createdAt: 2, content: "kept" });
+	});
+});
 
 describe("sqlite store", () => {
 	it("keeps two scopes in one database apart", async () => {
