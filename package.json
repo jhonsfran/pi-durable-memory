@@ -42,13 +42,17 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "^1.0.4",
-    "@earendil-works/pi-durable": "^1.0.4"
+    "@earendil-works/pi-durable": "^1.0.4",
+    "@typesafe-ai/sdk": "^0.6.0"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {
       "optional": true
     },
     "@earendil-works/pi-durable": {
+      "optional": true
+    },
+    "@typesafe-ai/sdk": {
       "optional": true
     }
   },
@@ -59,6 +63,7 @@
     "@earendil-works/pi-ai": "^1.0.4",
     "@earendil-works/pi-durable": "^1.0.4",
     "@types/node": "^22.18.0",
+    "@typesafe-ai/sdk": "^0.6.0",
     "typescript": "^5.9.0",
     "vitest": "^4.1.0"
   }

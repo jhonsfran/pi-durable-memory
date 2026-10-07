@@ -16,6 +16,9 @@ export function isAlignedBlock(range: MemoryRange): boolean {
 	return range.startId >= 0 && size >= 1 && 2 ** blockLevel(range) === size && range.startId % size === 0;
 }
 
+/** How the model reads a range: `#5` for one memory, `#0-7` for a block. */
+export const label = (range: MemoryRange): string => (blockSize(range) === 1 ? `#${range.startId}` : `#${range.startId}-${range.endId}`);
+
 export function blockAt(level: number, startId: number): MemoryRange {
 	return { startId, endId: startId + 2 ** level - 1 };
 }

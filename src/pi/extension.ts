@@ -162,7 +162,7 @@ export function createPiMemoryExtension(options: PiMemoryExtensionOptions): Exte
 					searched.map(async (scope) => {
 						const hits = await (await options.memory(scope)).recall(args.query, { limit: args.limit });
 						if (hits.length === 0) return undefined;
-						const lines = hits.map((hit) => `#${hit.id} ${hit.content}`).join("\n");
+						const lines = formatMemoryItems(hits);
 						return searched.length > 1 ? renderScope(scope, lines) : lines;
 					}),
 				);

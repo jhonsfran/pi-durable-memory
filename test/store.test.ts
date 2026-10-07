@@ -53,10 +53,29 @@ describe("sqlite store", () => {
 		expect(await b.store.count()).toBe(1);
 		expect(await b.memory.wake()).toEqual({ total: 1, items: [{ type: "memory", id: 0, createdAt: 1, content: "only in b" }] });
 		expect(await b.memory.recall("m1")).toEqual([]);
-		expect(await a.memory.recall("m1")).toEqual([{ id: 1, createdAt: 1_700_000_000_001, content: "m1" }]);
+		expect(await a.memory.recall("m1")).toEqual([{ type: "memory", id: 1, createdAt: 1_700_000_000_001, content: "m1" }]);
 		expect(await b.store.getNodes([{ level: 1, startId: 0 }, { level: 2, startId: 0 }])).toEqual([]);
 		expect(await b.store.levelLength(1)).toBe(0);
 		expect(await a.store.levelLength(1)).toBe(2);
+	});
+
+	it("adds the supersedes column to a database created before it existed and reopens without change", async () => {
+		const db = openNodeSqlite(":memory:");
+		await db.exec(
+			"CREATE TABLE memories (scope TEXT NOT NULL, id INTEGER NOT NULL, created_at INTEGER NOT NULL, content TEXT NOT NULL, source_id TEXT, PRIMARY KEY (scope, id), UNIQUE (scope, source_id))",
+		);
+		await db.run("INSERT INTO memories (scope, id, created_at, content, source_id) VALUES ('test', 0, 1, 'old', NULL)");
+		const { store } = await openFixture({ db });
+		expect(await store.appendMemory({ content: "new", createdAt: 2, supersedes: 0 })).toEqual({ id: 1, createdAt: 2, content: "new", supersedes: 0 });
+		expect(await store.getMemories({ startId: 0, endId: 1 })).toEqual([
+			{ id: 0, createdAt: 1, content: "old", supersededBy: 1 },
+			{ id: 1, createdAt: 2, content: "new", supersedes: 0 },
+		]);
+		const reopened = await openFixture({ db });
+		expect(await reopened.store.getMemoriesByIds([1, 0, 9])).toEqual([
+			{ id: 0, createdAt: 1, content: "old", supersededBy: 1 },
+			{ id: 1, createdAt: 2, content: "new", supersedes: 0 },
+		]);
 	});
 
 	it("keeps the first node when putNode sees the same key twice", async () => {
@@ -76,10 +95,11 @@ describe("sqlite store", () => {
 			await memory.note({ content: "Alpha AND beta on the cloud", createdAt: 2 });
 			await memory.note({ content: "cloud native from day one", createdAt: 3 });
 			await memory.note({ content: "nothing relevant here", createdAt: 4 });
-			expect((await memory.recall('"cloud first"')).map((entry) => entry.id)).toEqual([0]);
-			expect((await memory.recall("alpha AND beta")).map((entry) => entry.id)).toEqual([1]);
-			expect((await memory.recall("cloud")).map((entry) => entry.id)).toEqual([2, 1, 0]);
-			expect((await memory.recall("cloud", { limit: 2 })).map((entry) => entry.id)).toEqual([2, 1]);
+			const ids = async (query: string, limit?: number) => (await memory.recall(query, { limit })).map((item) => (item.type === "memory" ? item.id : item));
+			expect(await ids('"cloud first"')).toEqual([0]);
+			expect(await ids("alpha AND beta")).toEqual([1]);
+			expect(await ids("cloud")).toEqual([2, 1, 0]);
+			expect(await ids("cloud", 2)).toEqual([2, 1]);
 			expect(await memory.recall("cloud OR nothing")).toEqual([]);
 			expect(await memory.recall("   ")).toEqual([]);
 		});

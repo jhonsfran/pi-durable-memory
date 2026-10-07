@@ -56,8 +56,8 @@ describe("memory Durable Object", () => {
 		await stub.note({ content: "Node runs the file", createdAt: T0 + 1 });
 		await stub.note({ content: "Cloudflare again", createdAt: T0 + 2 });
 		expect(await stub.recall("Cloudflare")).toEqual([
-			{ id: 2, createdAt: T0 + 2, content: "Cloudflare again" },
-			{ id: 0, createdAt: T0, content: "Cloudflare runs the Durable Object" },
+			{ type: "memory", id: 2, createdAt: T0 + 2, content: "Cloudflare again" },
+			{ type: "memory", id: 0, createdAt: T0, content: "Cloudflare runs the Durable Object" },
 		]);
 	});
 

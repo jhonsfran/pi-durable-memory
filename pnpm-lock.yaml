@@ -26,6 +26,9 @@ importers:
       '@types/node':
         specifier: ^22.18.0
         version: 22.20.5
+      '@typesafe-ai/sdk':
+        specifier: ^0.6.0
+        version: 0.6.0
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
@@ -930,6 +933,10 @@ packages:
 
   '@types/retry@0.12.0':
     resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
+
+  '@typesafe-ai/sdk@0.6.0':
+    resolution: {integrity: sha512-IddX+Q0XM+VagOUZFeP7wZjaO4SHMdvnh2zEBdrZZnXedWI3BNK1lKhMx3ayrkFWvVLbVcUHJy6AVZlY+e6Jaw==}
+    engines: {node: '>=20'}
 
   '@vitest/expect@4.1.11':
     resolution: {integrity: sha512-VX2x5vNJXET47KAFzwERI+KRMtTTCSWTfSMKsW7JsUsXV4psq++e3DvZpuTDOpHcxytiDs6p2nhVb2tVDiiUYw==}
@@ -2170,6 +2177,8 @@ snapshots:
       undici-types: 6.21.0
 
   '@types/retry@0.12.0': {}
+
+  '@typesafe-ai/sdk@0.6.0': {}
 
   '@vitest/expect@4.1.11':
     dependencies:

@@ -6,7 +6,7 @@ import { Harness, MemoryStorage, createRegistry } from "@earendil-works/pi-durab
 import type { Conversation } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import { createMemory } from "../src/index.js";
-import type { Memory } from "../src/index.js";
+import type { Memory, MemoryStore } from "../src/index.js";
 import { createPiMemoryExtension } from "../src/pi/index.js";
 import type { MemoryAdmission, PiMemoryExtensionOptions } from "../src/pi/index.js";
 import { createSqliteMemoryStore } from "../src/sqlite/index.js";
@@ -26,20 +26,29 @@ const INSTRUCTIONS =
 /** One SQLite database shared by every scope, with one `Memory` instance per scope so tool calls and assertions see the same log. */
 function scopedMemories() {
 	const db = openNodeSqlite(":memory:");
+	const stores = new Map<string, Promise<MemoryStore>>();
 	const memories = new Map<string, Promise<Memory>>();
+	const store = (scope: string): Promise<MemoryStore> => {
+		let pending = stores.get(scope);
+		if (pending === undefined) {
+			pending = createSqliteMemoryStore(db, { scope });
+			stores.set(scope, pending);
+		}
+		return pending;
+	};
 	const memory: PiMemoryExtensionOptions["memory"] = (scope) => {
 		let pending = memories.get(scope);
 		if (pending === undefined) {
-			pending = createSqliteMemoryStore(db, { scope }).then((store) => createMemory({ store, summarizer: joinSummarizer }));
+			pending = store(scope).then((scoped) => createMemory({ store: scoped, summarizer: joinSummarizer }));
 			memories.set(scope, pending);
 		}
 		return pending;
 	};
-	return memory;
+	return { memory, store };
 }
 
 async function openHarness(options: Partial<PiMemoryExtensionOptions> = {}) {
-	const memory = scopedMemories();
+	const { memory, store } = scopedMemories();
 	const extension = createPiMemoryExtension({ memory, scopes: () => SCOPES, ...options });
 	const faux = fauxProvider();
 	const models = createModels();
@@ -48,7 +57,7 @@ async function openHarness(options: Partial<PiMemoryExtensionOptions> = {}) {
 	registry.install(extension);
 	const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
 	const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
-	return { memory, extension, faux, harness, root };
+	return { memory, store, extension, faux, harness, root };
 }
 
 /** Submit one input and run the faux script to its end. */
@@ -96,12 +105,12 @@ describe("pi extension", () => {
 	});
 
 	it("memory_note writes to the first scope with the tool task as its sourceId", async () => {
-		const { memory, faux, root, harness } = await openHarness({ compaction: "none" });
+		const { memory, store, faux, root, harness } = await openHarness({ compaction: "none" });
 		await run(root, faux, [toolCall("memory_note", { content: "User prefers concise answers." }), fauxAssistantMessage("Noted.")]);
 		expect(await toolResults(root)).toEqual([{ text: "Saved as #0 in agent:a.", isError: false }]);
 		const a = await memory("agent:a");
 		expect((await a.wake()).items).toEqual([{ type: "memory", id: 0, createdAt: expect.any(Number), content: "User prefers concise answers." }]);
-		const [entry] = await a.recall("concise");
+		const [entry] = await (await store("agent:a")).getMemories({ startId: 0, endId: 0 });
 		const taskId = Number(entry?.sourceId);
 		const task = await harness.getTask(taskId as Parameters<Harness["getTask"]>[0], context);
 		expect(task?.kind).toBe("pi.tool");

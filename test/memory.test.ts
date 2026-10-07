@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong, formatMemoryContext } from "../src/index.js";
 import type { MemoryItem, MemoryNode, MemoryRange, MemoryStore } from "../src/index.js";
-import { constantSummarizer, noteMany, openFixture, seedMemoriesBySql } from "./helpers.js";
+import { conceptEmbedder, constantSummarizer, noteMany, openFixture, seedMemoriesBySql } from "./helpers.js";
 
 const size = (range: MemoryRange): number => range.endId - range.startId + 1;
 
@@ -42,9 +42,7 @@ describe("memory", () => {
 				{ type: "memory", id: 1, createdAt: 2, content: "Memory lives in a Cloudflare Durable Object" },
 			],
 		});
-		expect(await memory.recall("Cloudflare")).toEqual([
-			{ id: 1, createdAt: 2, content: "Memory lives in a Cloudflare Durable Object", sourceId: "task-2" },
-		]);
+		expect(await memory.recall("Cloudflare")).toEqual([{ type: "memory", id: 1, createdAt: 2, content: "Memory lives in a Cloudflare Durable Object" }]);
 	});
 
 	it("treats sourceId as an idempotency key and appends freely without one", async () => {
@@ -221,6 +219,68 @@ describe("memory", () => {
 		expect(await store.getNodes([{ level: 1, startId: 0 }, { level: 1, startId: 2 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "[m0 m1]" }]);
 		expect(await memory.compact({ maxMerges: 3 })).toEqual({ merged: 3, pending: 3 });
 		expect(await memory.compact()).toEqual({ merged: 3, pending: 0 });
+	});
+
+	it("supersedes an older memory: hidden from wake, zoom and the summarizer, still in the store", async () => {
+		const { memory, store } = await openFixture();
+		await memory.note({ content: "prefers brevity", createdAt: 1 });
+		expect(await memory.note({ content: "prefers detail", supersedes: 0, createdAt: 2 })).toEqual({ id: 1, createdAt: 2, content: "prefers detail", supersedes: 0 });
+		expect(await memory.wake()).toEqual({ total: 2, items: [{ type: "memory", id: 1, createdAt: 2, content: "prefers detail" }] });
+		expect(formatMemoryContext(await memory.wake())).toBe("#1 prefers detail");
+		expect(await store.getMemories({ startId: 0, endId: 1 })).toEqual([
+			{ id: 0, createdAt: 1, content: "prefers brevity", supersededBy: 1 },
+			{ id: 1, createdAt: 2, content: "prefers detail", supersedes: 0 },
+		]);
+		expect(await memory.compact()).toEqual({ merged: 1, pending: 0 });
+		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "[prefers detail]" }]);
+		expect(await memory.zoom({ startId: 0, endId: 1 })).toEqual([{ type: "memory", id: 1, createdAt: 2, content: "prefers detail" }]);
+		expect(await memory.recall("prefers")).toEqual([{ type: "memory", id: 1, createdAt: 2, content: "prefers detail" }]);
+		await expect(memory.note({ content: "prefers tables", supersedes: 7 })).rejects.toThrow(new InvalidRange("#7 is not in the memory: it holds 2 memories"));
+		expect(await store.count()).toBe(2);
+	});
+
+	describe("hybrid recall over a SQLite vector index", () => {
+		const T0 = 1_700_000_000_000;
+		const contents = ["likes tabs", "deploys on friday", "drives a car", "prefers tea", "uses pnpm", "runs tests nightly", "lives in berlin", "codes in rust"];
+		const memoryItem = (id: number) => ({ type: "memory", id, createdAt: T0 + id, content: contents[id] });
+		const summary = (startId: number, endId: number) => ({ type: "summary", startId, endId, content: `[${contents.slice(startId, endId + 1).join(" ")}]` });
+
+		async function openIndexed() {
+			const fixture = await openFixture({ embedder: conceptEmbedder });
+			for (const [id, content] of contents.entries()) await fixture.memory.note({ content, createdAt: T0 + id });
+			expect(await fixture.memory.compact()).toEqual({ merged: 7, pending: 0 });
+			return fixture;
+		}
+
+		it("ranks the one lexical match first, then the summaries that contain it", async () => {
+			const { memory } = await openIndexed();
+			// "nightly" is a token of memory 5 only, so it leads both the full-text and the semantic list.
+			expect(await memory.recall("nightly")).toEqual([memoryItem(5), summary(4, 5), summary(4, 7), summary(0, 7)]);
+		});
+
+		it("finds a memory with no token in common through the index", async () => {
+			const { memory } = await openIndexed();
+			// No memory contains "automobile"; the fake embedder maps it to the dimension "car" owns, which only memory 2
+			// has. The summaries holding memory 2 share that dimension too but their other words dilute the cosine.
+			expect(await memory.recall("automobile")).toEqual([memoryItem(2), summary(2, 3), summary(0, 3), summary(0, 7)]);
+		});
+
+		it("returns the node closest to the query by default and only memories with summaries: false", async () => {
+			const { memory } = await openIndexed();
+			// Each word owns a dimension and no memory holds more than one of them, so the #4-7 summary, which holds all
+			// four and nothing else, is the closest vector; nothing matches all four words lexically.
+			const query = "pnpm nightly berlin rust";
+			expect(await memory.recall(query)).toEqual([summary(4, 7), summary(0, 7), summary(4, 5), summary(6, 7), memoryItem(4), memoryItem(5), memoryItem(6), memoryItem(7)]);
+			expect(await memory.recall(query, { summaries: false })).toEqual([memoryItem(4), memoryItem(5), memoryItem(6), memoryItem(7)]);
+			expect(await memory.recall(query, { limit: 2 })).toEqual([summary(4, 7), summary(0, 7)]);
+		});
+
+		it("skips index entries whose node was forgotten and superseded memories", async () => {
+			const { memory } = await openIndexed();
+			expect(await memory.forget({ startId: 4, endId: 7 })).toBe(2);
+			await memory.note({ content: "uses bun", supersedes: 4, createdAt: T0 + 8 });
+			expect(await memory.recall("pnpm nightly berlin rust")).toEqual([summary(4, 5), summary(6, 7), memoryItem(5), memoryItem(6), memoryItem(7)]);
+		});
 	});
 
 	it("normalizes and truncates summaries on a character boundary", async () => {

@@ -18,6 +18,10 @@ export interface MemoryEntry {
 	readonly content: string;
 	/** Idempotency key supplied by the writer, such as a Pi Durable tool task id. */
 	readonly sourceId?: string;
+	/** The older memory this one replaces. The older one stays in the log and is hidden from `wake()`, `recall()` and the summarizer. */
+	readonly supersedes?: number;
+	/** The newer memory that replaced this one, when one exists. */
+	readonly supersededBy?: number;
 }
 
 /** An aligned power-of-two block of the log: `endId - startId + 1` is a power of two and `startId` is a multiple of it. */
@@ -55,6 +59,8 @@ export interface NoteInput {
 	readonly sourceId?: string | undefined;
 	/** Milliseconds since epoch. Defaults to now. */
 	readonly createdAt?: number | undefined;
+	/** Id of an existing memory this one replaces. Throws `InvalidRange` when it is not in the log. */
+	readonly supersedes?: number | undefined;
 }
 
 export interface WakeOptions {
@@ -65,7 +71,12 @@ export interface WakeOptions {
 export interface RecallOptions {
 	/** Defaults to 10. */
 	readonly limit?: number | undefined;
+	/** Include summary nodes the index matched, as `summary` items the caller can `zoom()` into. Default true. */
+	readonly summaries?: boolean | undefined;
 }
+
+/** A `recall()` hit: a raw memory or a summary node, never `pending`. Best match first. */
+export type RecallItem = Extract<MemoryItem, { type: "memory" | "summary" }>;
 
 export interface CompactOptions {
 	/** Stop after this many merges. Defaults to all pending merges. */
@@ -98,12 +109,35 @@ export interface MemorySummarizer {
 	summarize(input: SummarizeInput): Promise<string>;
 }
 
+/** Turns texts into vectors. Every vector of one embedder has the same length. */
+export interface Embedder {
+	embed(texts: readonly string[]): Promise<Float32Array[]>;
+}
+
+/** What an index entry points at. */
+export type IndexKey = { readonly kind: "memory"; readonly id: number } | { readonly kind: "node"; readonly level: number; readonly startId: number };
+
+/**
+ * Optional semantic index over memories and summary nodes. `note()` and `compact()` upsert into
+ * it; `recall()` queries it. An entry whose key no longer resolves (a forgotten node) is skipped
+ * at read time, so the index never needs deletes.
+ */
+export interface MemoryIndex {
+	upsert(entries: ReadonlyArray<{ readonly key: IndexKey; readonly text: string }>): Promise<void>;
+	/** Best matches first, `score` higher is better. */
+	query(text: string, limit: number): Promise<Array<{ readonly key: IndexKey; readonly score: number }>>;
+}
+
 /** One scope's memory. Every method is safe to call concurrently with the others and to retry after a crash. */
 export interface Memory {
 	note(input: NoteInput): Promise<MemoryEntry>;
 	wake(options?: WakeOptions): Promise<MemoryContext>;
-	/** Newest matches first. */
-	recall(query: string, options?: RecallOptions): Promise<MemoryEntry[]>;
+	/**
+	 * Memories and summaries matching the query, best first. Full-text matches on memories always
+	 * contribute; when an index is configured, its semantic matches on memories and summaries are
+	 * fused in by reciprocal rank. Superseded memories are excluded.
+	 */
+	recall(query: string, options?: RecallOptions): Promise<RecallItem[]>;
 	/** The two halves of one block, each rendered as `wake()` renders it. Throws `InvalidRange` for a range that is not an aligned block inside the log. */
 	zoom(range: MemoryRange): Promise<MemoryItem[]>;
 	compact(options?: CompactOptions): Promise<CompactResult>;
@@ -123,10 +157,17 @@ export interface Memory {
 export interface MemoryStore {
 	count(): Promise<number>;
 	/** Append at position `count()`, or return the existing entry with the same `sourceId`. Atomic. */
-	appendMemory(input: { readonly content: string; readonly sourceId?: string | undefined; readonly createdAt: number }): Promise<MemoryEntry>;
+	appendMemory(input: {
+		readonly content: string;
+		readonly sourceId?: string | undefined;
+		readonly createdAt: number;
+		readonly supersedes?: number | undefined;
+	}): Promise<MemoryEntry>;
 	/** Entries with ids in the range, ascending. Ids beyond the log are simply absent. */
 	getMemories(range: MemoryRange): Promise<MemoryEntry[]>;
-	/** Full-text matches, newest first. */
+	/** Entries with these ids, in any order. Ids beyond the log are simply absent. */
+	getMemoriesByIds(ids: readonly number[]): Promise<MemoryEntry[]>;
+	/** Full-text matches, newest first. Superseded memories are included; the core filters. */
 	searchMemories(query: string, limit: number): Promise<MemoryEntry[]>;
 	getNodes(keys: ReadonlyArray<{ readonly level: number; readonly startId: number }>): Promise<MemoryNode[]>;
 	/** False when a node with the same `(level, startId)` already exists; the existing node is kept. */
@@ -140,5 +181,7 @@ export interface MemoryStore {
 export interface CreateMemoryOptions {
 	readonly store: MemoryStore;
 	readonly summarizer: MemorySummarizer;
+	/** Semantic index for `recall()`. Without one, recall is full-text only. */
+	readonly index?: MemoryIndex | undefined;
 	readonly limits?: Partial<MemoryLimits> | undefined;
 }
