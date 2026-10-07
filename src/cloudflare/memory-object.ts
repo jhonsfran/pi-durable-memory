@@ -1,11 +1,20 @@
 import { DurableObject } from "cloudflare:workers";
 import { createMemory } from "../core/memory.js";
-import type { CompactOptions, Memory, MemoryLimits, MemoryRange, MemorySummarizer, NoteInput, RecallOptions, WakeOptions } from "../core/types.js";
+import type { CompactOptions, Memory, MemoryIndex, MemoryLimits, MemoryRange, MemorySummarizer, NoteInput, RecallOptions, WakeOptions } from "../core/types.js";
 import { createSqliteMemoryStore } from "../sqlite/store.js";
 import { durableObjectSql } from "./sql.js";
 
 export interface MemoryObjectOptions<Env> {
 	readonly summarizer: (env: Env) => MemorySummarizer;
+	/**
+	 * Semantic index for `recall()`, built once per object alongside its store. Without one, recall
+	 * is full-text only. A Durable Object cannot recover its name from its id, so a per-scope
+	 * Vectorize namespace is `ctx.id.toString()`:
+	 * `createVectorizeIndex(env.VECTORS, { namespace: ctx.id.toString(), embedder })`. For small
+	 * scopes the SQLite brute-force index works inside the object too:
+	 * `createSqliteVectorIndex(durableObjectSql(ctx.storage), { scope: "self", embedder })`.
+	 */
+	readonly index?: ((env: Env, ctx: DurableObjectState) => MemoryIndex | Promise<MemoryIndex>) | undefined;
 	readonly limits?: Partial<MemoryLimits> | undefined;
 	/** Merges per alarm run before rescheduling. Default 32. */
 	readonly mergesPerAlarm?: number | undefined;
@@ -30,8 +39,8 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 		private memory: Promise<Memory> | undefined;
 
 		private open(): Promise<Memory> {
-			this.memory ??= createSqliteMemoryStore(durableObjectSql(this.ctx.storage), { scope: SCOPE }).then(
-				(store) => createMemory({ store, summarizer: options.summarizer(this.env), limits: options.limits }),
+			this.memory ??= Promise.all([createSqliteMemoryStore(durableObjectSql(this.ctx.storage), { scope: SCOPE }), options.index?.(this.env, this.ctx)]).then(
+				([store, index]) => createMemory({ store, summarizer: options.summarizer(this.env), index, limits: options.limits }),
 				(error: unknown) => {
 					this.memory = undefined;
 					throw error;

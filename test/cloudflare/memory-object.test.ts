@@ -61,6 +61,23 @@ describe("memory Durable Object", () => {
 		]);
 	});
 
+	it("recalls by the index when no word overlaps, and ranks the summary the query is closest to", async () => {
+		const stub = stubFor("semantic");
+		await stub.note({ content: "pnpm installs it", createdAt: T0 });
+		await stub.note({ content: "berlin is cold", createdAt: T0 + 1 });
+		await stub.note({ content: "the automobile", createdAt: T0 + 2 });
+		await stub.note({ content: "rust compiles", createdAt: T0 + 3 });
+		await compacted(stub);
+		expect(await stub.recall("car")).toEqual([
+			{ type: "memory", id: 2, createdAt: T0 + 2, content: "the automobile" },
+			{ type: "summary", startId: 2, endId: 3, content: "[the automobile rust compiles]" },
+			{ type: "summary", startId: 0, endId: 3, content: "[pnpm installs it berlin is cold the automobile rust compiles]" },
+		]);
+		expect(await stub.recall("pnpm berlin automobile rust", { limit: 1 })).toEqual([
+			{ type: "summary", startId: 0, endId: 3, content: "[pnpm installs it berlin is cold the automobile rust compiles]" },
+		]);
+	});
+
 	it("forget schedules a rebuild that restores the summaries", async () => {
 		const stub = stubFor("forget");
 		await noteMany(stub, 8);
