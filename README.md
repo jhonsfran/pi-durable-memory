@@ -1,8 +1,14 @@
 # pi-durable-memory
 
-Long-term memory for [Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable) agents on Cloudflare. One Durable Object per memory scope. Inside it, an append-only log of one-line memories and a binary tree of summaries above it. Before every model request the agent's system prompt gets a bounded view of the whole history, coarse for old memories and verbatim for recent ones. The exact memories are always one `zoom` or `recall` away. The idea comes from [OptMem](https://github.com/VictorTaelin/OptMem).
+Long-term memory for [Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable) agents on Cloudflare. One Durable Object per memory scope. Inside it, an append-only log of one-line memories and a binary tree of summaries above it. Before every model request the agent's system prompt gets a bounded view of the whole history, coarse for old memories and verbatim for recent ones. The exact memories are always one `zoom` or `recall` away. The design is [OptMem](https://github.com/VictorTaelin/OptMem) by Victor Taelin, reimplemented for this runtime. See [Credits](#credits).
 
 Pi Durable's compaction manages the context of one conversation. This package manages knowledge that outlives conversations, sessions, and harnesses.
+
+## Two minutes on how it works
+
+[![The explainer video: log, tree, bounded wake, zoom, and what the optional pieces fix](docs/explainer.png)](docs/explainer.mp4)
+
+[Watch the video](docs/explainer.mp4) (2:08, with narration). The log, the summary tree, the bounded wake that goes into the system prompt, zoom back to the exact memory, and the two things that go wrong at scale.
 
 ## Setup
 
@@ -161,3 +167,9 @@ note #7      #0 #1 #2 #3 #4 #5 #6 #7      ← the log, never edited
 pnpm install
 pnpm check   # typecheck, Node tests (core and extension on node:sqlite), workers-runtime tests (the object, inside workerd)
 ```
+
+## Credits
+
+The memory model is [OptMem](https://github.com/VictorTaelin/OptMem) by [Victor Taelin](https://github.com/VictorTaelin): an append-only log of one-line memories, a binary tree of summaries over aligned power-of-two blocks, a wake cover computed from the memory count alone so the context stays bounded, and zoom and recall back to the raw entries. The cover algorithm here follows his `cover` function, including the bisection on the decay factor and the leftover budget spent on the newest blocks. His tool is a single Python file for a shell agent; this package is a TypeScript implementation of the same design for Pi Durable agents on Cloudflare Durable Objects, with an injected summarizer, scopes, idempotent notes, and an admission hook. No code is shared.
+
+If you build on this, credit OptMem too.
