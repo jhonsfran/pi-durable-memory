@@ -4,6 +4,41 @@ Durable long-term memory for agents built on [Pi Durable](https://github.com/ear
 
 Pi Durable's compaction manages the context of one conversation. This package manages knowledge that outlives conversations, sessions, and harnesses. They are different layers.
 
+## The simple path
+
+Five things, and the agent has a memory that survives every session:
+
+1. A store. SQLite, one file holding every scope.
+2. A summarizer. Any model, called with `buildSummaryPrompt(input)`.
+3. `createMemory({ store, summarizer })`, one per scope.
+4. `createPiMemoryExtension({ memory, scopes })`, installed in the registry.
+5. A `scopes` function that names the scopes a conversation reads and writes.
+
+```ts
+import { createMemory, buildSummaryPrompt } from "pi-durable-memory";
+import type { Memory } from "pi-durable-memory";
+import { createSqliteMemoryStore } from "pi-durable-memory/sqlite";
+import { openNodeSqlite } from "pi-durable-memory/sqlite/node";
+import { createPiMemoryExtension } from "pi-durable-memory/pi";
+
+const db = openNodeSqlite("memory.db");
+const summarizer = { summarize: async (input) => completeWithYourModel(buildSummaryPrompt(input)) };
+const memories = new Map<string, Promise<Memory>>();
+const memoryFor = (scope: string) =>
+	memories.get(scope) ?? memories.set(scope, createSqliteMemoryStore(db, { scope }).then((store) => createMemory({ store, summarizer }))).get(scope)!;
+
+registry.install(
+	createPiMemoryExtension({
+		memory: memoryFor,
+		scopes: ({ conversationId }) => [`agent:${conversationId}`, "project:unprice"],
+	}),
+);
+```
+
+From then on, before every model request, the system prompt carries a `<memory>` section: an instruction paragraph, then each scope's history as `#a-b` summary lines for old ranges and `#id` raw lines for recent ones. The model reads it like any other instruction. When a summary line matters, it calls `memory_recall` for exact words or `memory_zoom` on the `#a-b` line to open it. When it learns something durable, it calls `memory_note`. Compaction runs as a durable Pi task after each note.
+
+That is the whole idea, and it is enough for most agents. Everything under [When you need more](#when-you-need-more) is optional and off by default.
+
 ## Install
 
 ```sh
@@ -63,32 +98,6 @@ const summarizer = {
 
 A summary then reads `Acme cannot use Stripe (#532); deploys need approval (#4120)`, and every citation is one `recall()` or `zoom()` from its source.
 
-### Superseding a memory
-
-The log is append-only, so a changed preference is a new memory that retires the old one:
-
-```ts
-await memory.note({ content: "User prefers detailed answers.", supersedes: 12 });
-```
-
-Memory 12 stays in the log with `supersededBy: 13` and disappears from `wake()`, `recall()`, and the summarizer's input. Summaries built before the change still mention the old fact until they are rebuilt; the citation leads to a memory marked superseded, and `recall()` finds the current one.
-
-### Semantic recall
-
-Full-text search finds "Stripe" but not "payment provider constraints". A `MemoryIndex` adds the semantic path: `note()` indexes each memory, `compact()` indexes each summary, and `recall()` fuses both lists with full-text matches by reciprocal rank. Indexing summaries is what makes old history reachable: a query lands on a `#512-1023` node, and `zoom()` walks down to the exact memory.
-
-```ts
-import { createSqliteMemoryStore, createSqliteVectorIndex } from "pi-durable-memory/sqlite";
-
-const embedder = { embed: async (texts) => yourEmbeddingModel(texts) };
-const index = await createSqliteVectorIndex(db, { scope: "agent:seb", embedder });
-const memory = createMemory({ store, summarizer, index });
-```
-
-The SQLite index is brute-force cosine over the scope's vectors and is fine to roughly 20,000 entries at 384 dimensions. Larger scopes use an external index behind the same interface, such as Vectorize on Cloudflare (below). Without an index, `recall()` is full-text only.
-
-`wake()` reads a bounded number of rows however large the log is. The cover is computed from the memory count alone, then at most `maxItems` rows are fetched. A test seeds 100,000 memories and asserts one `count`, one `getMemories`, and one `getNodes` call returning 96 rows in total.
-
 ## Scopes
 
 The core is one scope. A scope is any string the host chooses: `agent:abc`, `user:seb`, `project:unprice`, `company:acme`. Composition happens outside `createMemory()`.
@@ -147,9 +156,107 @@ createPiMemoryExtension({ memory, scopes, admission });
 
 A decision is `{ admit: true, content?, scope? }` to store, with an optional rewrite of the text or the target scope, or `{ admit: false, reason }` to skip. A skipped note returns `Not saved: <reason>` to the model as a normal result, not an error, so the model can move on. A rewritten scope must still be one of the conversation's scopes.
 
-The hook receives the scope's `memory`, so it can read before it decides, and its decision may carry `supersedes` to retire an older memory. What the hook is not: it does not run on host calls to `note()`, and it does not see the conversation. If an admission policy needs the transcript, build it from Pi Durable's hooks on the tool task and call `note()` yourself.
+What the hook is not: it does not run on host calls to `note()`, and it does not see the conversation. If an admission policy needs the transcript, build it from Pi Durable's hooks on the tool task and call `note()` yourself.
 
-### Retrieval-backed admission
+## Cloudflare
+
+```ts
+import { defineMemoryObject, createMemoryClient } from "pi-durable-memory/cloudflare";
+
+export const MemoryObject = defineMemoryObject<Env>({
+	summarizer: (env) => workersAiSummarizer(env.AI),
+});
+
+// In the agent:
+const memoryFor = createMemoryClient(env.MEMORY);
+registry.install(createPiMemoryExtension({ memory: memoryFor, scopes, compaction: "none" }));
+```
+
+```jsonc
+// wrangler.jsonc
+{
+	"durable_objects": { "bindings": [{ "name": "MEMORY", "class_name": "MemoryObject" }] },
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MemoryObject"] }]
+}
+```
+
+Each object owns one scope's tables in its SQLite storage and exposes the `Memory` interface over RPC. Every `note()` and `forget()` sets an alarm; the handler compacts a bounded batch (`mergesPerAlarm`, 32) and reschedules while merges remain. Agents never compact Durable Object scopes themselves, hence `compaction: "none"` in the extension. A shared scope such as `company:acme` is one object several agents call. FTS5 is available inside Durable Object SQLite, so `recall()` uses it there.
+
+## Storage
+
+The SQLite store runs over a small async facade (`exec`, `run`, `get`, `all`, `transaction`) that is structurally the same as Pi Durable's, so its adapters work here too. Two adapters ship: `openNodeSqlite(path)` over `node:sqlite` (Node 22.18 or later) and `durableObjectSql(ctx.storage)`. Any other backend implements `MemoryStore` directly.
+
+Schema, two tables:
+
+```sql
+CREATE TABLE memories (scope, id, created_at, content, source_id,
+  PRIMARY KEY (scope, id), UNIQUE (scope, source_id));
+CREATE TABLE memory_nodes (scope, level, start_id, end_id, summary,
+  PRIMARY KEY (scope, level, start_id));
+```
+
+Plus an FTS5 table when the runtime has FTS5, with a `LIKE` fallback otherwise, and a `memory_vectors` table when the SQLite vector index is used. A `supersedes` column is added to existing databases on open.
+
+## When you need more
+
+Each piece below exists because a real log shows the pain it names. None is required, none runs unless configured, and the tests prove the simple path works without them.
+
+### A preference changed: supersede
+
+Pain: the user changes their mind, the model notes the new preference, and both versions sit in the log until a summary blends them.
+
+
+The log is append-only, so a changed preference is a new memory that retires the old one:
+
+```ts
+await memory.note({ content: "User prefers detailed answers.", supersedes: 12 });
+```
+
+Memory 12 stays in the log with `supersededBy: 13` and disappears from `wake()`, `recall()`, and the summarizer's input. Summaries built before the change still mention the old fact until they are rebuilt; the citation leads to a memory marked superseded, and `recall()` finds the current one.
+
+### The model does not know the words: semantic recall
+
+Pain: `recall("payment provider constraints")` never finds "Acme cannot use Stripe". With cited ids in summaries this is the minority case, since `zoom` by id is exact, but it happens.
+
+
+Full-text search finds "Stripe" but not "payment provider constraints". A `MemoryIndex` adds the semantic path: `note()` indexes each memory, `compact()` indexes each summary, and `recall()` fuses both lists with full-text matches by reciprocal rank. Indexing summaries is what makes old history reachable: a query lands on a `#512-1023` node, and `zoom()` walks down to the exact memory.
+
+```ts
+import { createSqliteMemoryStore, createSqliteVectorIndex } from "pi-durable-memory/sqlite";
+
+const embedder = { embed: async (texts) => yourEmbeddingModel(texts) };
+const index = await createSqliteVectorIndex(db, { scope: "agent:seb", embedder });
+const memory = createMemory({ store, summarizer, index });
+```
+
+The SQLite index is brute-force cosine over the scope's vectors and is fine to roughly 20,000 entries at 384 dimensions. Larger scopes use an external index behind the same interface, such as Vectorize on Cloudflare (below). Without an index, `recall()` is full-text only.
+
+`wake()` reads a bounded number of rows however large the log is. The cover is computed from the memory count alone, then at most `maxItems` rows are fetched. A test seeds 100,000 memories and asserts one `count`, one `getMemories`, and one `getNodes` call returning 96 rows in total.
+
+### Semantic recall on Cloudflare
+
+
+Durable Object SQLite has no vector extension and an object has 128 MB of memory, so brute force stops at small scopes. Vectorize is the index for the rest, one namespace per object:
+
+```ts
+import { createVectorizeIndex, defineMemoryObject } from "pi-durable-memory/cloudflare";
+
+export const MemoryObject = defineMemoryObject<Env>({
+	summarizer: (env) => workersAiSummarizer(env.AI),
+	index: (env, ctx) =>
+		createVectorizeIndex(env.VECTORS, {
+			namespace: ctx.id.toString(), // an object cannot recover its name from its id
+			embedder: workersAiEmbedder(env.AI),
+		}),
+});
+```
+
+Vectorize mutations are asynchronous: a vector is queryable seconds after `upsert` resolves. A recall right after a note may miss the newest memory on the semantic path until then; the full-text path still finds it. For a scope that stays small, `createSqliteVectorIndex(durableObjectSql(ctx.storage), { scope: "self", embedder })` works inside the object with no external service.
+
+### The model repeats itself: retrieval-backed admission
+
+Pain: the model notes the same fact twice, or appends a contradiction instead of replacing. It decides blind.
+
 
 The model decides what to note, but it decides blind: it repeats itself, and when a preference changes it appends a contradiction. `createRetrievalAdmission` gives it eyes. Before every write it recalls the five nearest existing memories and asks a judge one question with four answers: new, duplicate of #n, supersedes #n, or reject.
 
@@ -169,7 +276,8 @@ const admission = createRetrievalAdmission({
 
 Duplicates are skipped with `Not saved: duplicate of #n`. Supersedes writes the new memory with `supersedes` set. A judge naming an id that is not among the neighbors is treated as new. The cost is one recall and one small judgment per note, and notes are rare.
 
-### With Jev
+### The judge without a generative model: Jev
+
 
 [Jev](https://docs.typesafe.ai/) is TypeSafe AI's System One model: typed questions, calibrated probabilities, no generation. It fits the judge role exactly, because admission is a decision, not a text. `pi-durable-memory/jev` ships a judge that asks Jev three questions in one call: is the candidate durable (a yes/no), how it relates to the existing memories (new, duplicate, supersedes), and which memory it duplicates or replaces.
 
@@ -203,64 +311,6 @@ const admission = {
 ```
 
 Jev does not write summaries. Summarization still needs a generative model behind `MemorySummarizer`.
-
-## Cloudflare
-
-```ts
-import { defineMemoryObject, createMemoryClient } from "pi-durable-memory/cloudflare";
-
-export const MemoryObject = defineMemoryObject<Env>({
-	summarizer: (env) => workersAiSummarizer(env.AI),
-});
-
-// In the agent:
-const memoryFor = createMemoryClient(env.MEMORY);
-registry.install(createPiMemoryExtension({ memory: memoryFor, scopes, compaction: "none" }));
-```
-
-```jsonc
-// wrangler.jsonc
-{
-	"durable_objects": { "bindings": [{ "name": "MEMORY", "class_name": "MemoryObject" }] },
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MemoryObject"] }]
-}
-```
-
-Each object owns one scope's tables in its SQLite storage and exposes the `Memory` interface over RPC. Every `note()` and `forget()` sets an alarm; the handler compacts a bounded batch (`mergesPerAlarm`, 32) and reschedules while merges remain. Agents never compact Durable Object scopes themselves, hence `compaction: "none"` in the extension. A shared scope such as `company:acme` is one object several agents call. FTS5 is available inside Durable Object SQLite, so `recall()` uses it there.
-
-### Semantic recall on Cloudflare
-
-Durable Object SQLite has no vector extension and an object has 128 MB of memory, so brute force stops at small scopes. Vectorize is the index for the rest, one namespace per object:
-
-```ts
-import { createVectorizeIndex, defineMemoryObject } from "pi-durable-memory/cloudflare";
-
-export const MemoryObject = defineMemoryObject<Env>({
-	summarizer: (env) => workersAiSummarizer(env.AI),
-	index: (env, ctx) =>
-		createVectorizeIndex(env.VECTORS, {
-			namespace: ctx.id.toString(), // an object cannot recover its name from its id
-			embedder: workersAiEmbedder(env.AI),
-		}),
-});
-```
-
-Vectorize mutations are asynchronous: a vector is queryable seconds after `upsert` resolves. A recall right after a note may miss the newest memory on the semantic path until then; the full-text path still finds it. For a scope that stays small, `createSqliteVectorIndex(durableObjectSql(ctx.storage), { scope: "self", embedder })` works inside the object with no external service.
-
-## Storage
-
-The SQLite store runs over a small async facade (`exec`, `run`, `get`, `all`, `transaction`) that is structurally the same as Pi Durable's, so its adapters work here too. Two adapters ship: `openNodeSqlite(path)` over `node:sqlite` (Node 22.18 or later) and `durableObjectSql(ctx.storage)`. Any other backend implements `MemoryStore` directly.
-
-Schema, two tables:
-
-```sql
-CREATE TABLE memories (scope, id, created_at, content, source_id,
-  PRIMARY KEY (scope, id), UNIQUE (scope, source_id));
-CREATE TABLE memory_nodes (scope, level, start_id, end_id, summary,
-  PRIMARY KEY (scope, level, start_id));
-```
-
-Plus an FTS5 table when the runtime has FTS5, with a `LIKE` fallback otherwise, and a `memory_vectors` table when the SQLite vector index is used. A `supersedes` column is added to existing databases on open.
 
 ## Invariants the tests hold
 
