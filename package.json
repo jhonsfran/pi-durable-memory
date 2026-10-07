@@ -27,6 +27,10 @@
     "./cloudflare": {
       "types": "./dist/cloudflare/index.d.ts",
       "import": "./dist/cloudflare/index.js"
+    },
+    "./jev": {
+      "types": "./dist/jev/index.d.ts",
+      "import": "./dist/jev/index.js"
     }
   },
   "files": [
