@@ -10,8 +10,8 @@ interface Env {
 	RATE_LIMITER: RateLimit;
 }
 
-// A real scope keeps the 16,384-byte default. The demo folds at 2,048 bytes, so a short test shows old notes turning into summary lines.
-export const MemoryObject = defineMemoryObject<Env>({ limits: { viewBytes: 2048 } });
+// A real scope keeps the 16,384-byte default. The demo folds at 1,024 bytes, about 20 short notes, so a short test shows old notes turning into summary lines.
+export const MemoryObject = defineMemoryObject<Env>({ limits: { viewBytes: 1024 } });
 
 const MEMORY_PATH = /^\/m\/([A-Za-z0-9_-]{22})(\/wake\.json|\/zoom\.json|\/destroy)?$/;
 

@@ -71,8 +71,9 @@ for (;;) {
 assert.deepEqual([...lines.keys()], ["0-1", "2-3", "4-5"]);
 console.log("ok nothing left to summarize");
 
-assert.equal(await ok("memory_wake"), notes.map((note, index) => `#${index} ${note}`).join("\n"));
-console.log("ok wake shows the 6 notes");
+// The 6 notes pass the demo's 1,024-byte viewBytes, so the oldest pairs fold into the summaries committed above.
+assert.equal(await ok("memory_wake"), [`#0-1 ${lines.get("0-1")}`, `#2-3 ${lines.get("2-3")}`, `#4 ${notes[4]}`, `#5 ${notes[5]}`].join("\n"));
+console.log("ok wake folds #0-1 and #2-3 and keeps #4 and #5 verbatim");
 
 assert.equal(await ok("memory_zoom", { startId: 0, endId: 3 }), `#0-1 ${lines.get("0-1")}\n#2-3 ${lines.get("2-3")}`);
 assert.equal(await ok("memory_zoom", { startId: 0, endId: 1 }), `#0 ${notes[0]}\n#1 ${notes[1]}`);
@@ -94,7 +95,12 @@ const { items, total } = JSON.parse(wake.body);
 assert.equal(total, 6);
 assert.deepEqual(
 	items.map(({ createdAt, ...item }) => item),
-	notes.map((content, id) => ({ type: "memory", id, content })),
+	[
+		{ type: "summary", startId: 0, endId: 1, content: lines.get("0-1") },
+		{ type: "summary", startId: 2, endId: 3, content: lines.get("2-3") },
+		{ type: "memory", id: 4, content: notes[4] },
+		{ type: "memory", id: 5, content: notes[5] },
+	],
 );
 const zoom = await get("/zoom.json?startId=0&endId=3");
 assert.deepEqual(JSON.parse(zoom.body), [

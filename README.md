@@ -229,7 +229,7 @@ A cheaper design asks the model to delete the fact from each ancestor's text, in
 
 ## Try it over MCP
 
-`examples/mcp-demo` is one Worker that gives Claude Code, Codex, or Pi a memory over MCP. `memory_note`, `memory_recall`, and `memory_zoom` work as in the Pi extension, and `memory_wake` reads the view. The memory object has no summarizer, so the agent writes each summary line itself through `memory_pending` and `memory_commit`. The demo sets `viewBytes` to 2,048 instead of 16,384, so a short test shows old notes folding into summary lines.
+`examples/mcp-demo` is one Worker that gives Claude Code, Codex, or Pi a memory over MCP. `memory_note`, `memory_recall`, and `memory_zoom` work as in the Pi extension, and `memory_wake` reads the view. The memory object has no summarizer, so the agent writes each summary line itself through `memory_pending` and `memory_commit`. The demo sets `viewBytes` to 1,024 instead of 16,384, so about 20 short notes are enough to see old notes fold into summary lines.
 
 The demo has no login. Each memory lives at a URL with an unguessable id, and anyone who has the URL can read and write the memory. Each client IP gets 300 memory requests a minute.
 
