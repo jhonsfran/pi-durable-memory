@@ -1,7 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { InvalidRange } from "../src/index.js";
 import type { MemoryContext, MemoryItem, MemoryRange } from "../src/index.js";
+import { foldView } from "../src/core/view.js";
+import type { Part } from "../src/core/view.js";
 import { noteMany, openFixture, refusingSummarizer, seedMemoriesBySql, seedNodesBySql, spanSummarizer } from "./helpers.js";
+
+type PushList = { readonly keep: 0 | 1; readonly state: number; readonly older: PushList | null } | null;
+
+/** Taelin's rollback `push` (rollback_state_list.js, 2022, as quoted in the UniiChat spec), without the rollback-only `life`. */
+function push(state: number, list: PushList): PushList {
+	if (list === null) return { keep: 0, state, older: null };
+	if (list.keep === 0) return { ...list, keep: 1 };
+	return { keep: 0, state, older: push(list.state, list.older) };
+}
+
+/** The lines a push list stands for, oldest first: each kept state starts a line that runs to the next newer one. */
+function pushLines(list: PushList, total: number): string[] {
+	const starts: number[] = [];
+	for (let entry = list; entry !== null; entry = entry.older) starts.push(entry.state);
+	starts.reverse();
+	return starts.map((start, k) => `${start}+${(starts[k + 1] ?? total) - start}`);
+}
 
 const rangeOf = (item: MemoryItem): MemoryRange => (item.type === "memory" ? { startId: item.id, endId: item.id } : { startId: item.startId, endId: item.endId });
 const bytes = (context: MemoryContext): number => context.items.reduce((sum, item) => sum + new TextEncoder().encode(item.content).length, 0);
@@ -23,6 +42,21 @@ function gaps(parts: readonly MemoryRange[], total: number): string[] {
 }
 
 describe("view", () => {
+	it("merges exactly the pairs Taelin's push merges when its length is the budget", async () => {
+		const parts: Part[] = [];
+		const source = { levelLengths: Array<number>(16).fill(Number.MAX_SAFE_INTEGER), bytes: async () => 1 };
+		let list: PushList = null;
+		const differing: string[] = [];
+		for (let id = 0; id < 4096; id++) {
+			list = push(id, list);
+			const expected = pushLines(list, id + 1);
+			await foldView(parts, id, id + 1, expected.length, source);
+			const got = parts.map((part) => `${part.startId}+${2 ** part.level}`);
+			if (got.join() !== expected.join()) differing.push(`T=${id + 1}: push ${expected.join(", ")}, fold ${got.join(", ")}`);
+		}
+		expect(differing.slice(0, 3)).toEqual([]);
+	});
+
 	it("wakes within viewBytes once compaction has built the parents, tiling the whole log", async () => {
 		const { memory } = await openFixture({ summarizer: spanSummarizer, limits: { summaryBytes: 16, viewBytes: 256 } });
 		await noteMany(memory, 1000);

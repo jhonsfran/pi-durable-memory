@@ -12,7 +12,11 @@ export interface FoldSource {
 	bytes(range: MemoryRange): Promise<number>;
 }
 
-const due = (total: number, startId: number, level: number): number => (total - startId) / 2 ** (level + 2);
+/** How long ago a pair of sibling lines ended, in its own line size. Measuring from the pair's first message instead rewrites old lines that Taelin's push keeps. */
+const due = (total: number, startId: number, level: number): number => {
+	const last = startId + 2 ** (level + 1) - 1;
+	return (total - last) / 2 ** level;
+};
 
 export async function foldView(parts: Part[], from: number, total: number, budget: number, source: FoldSource): Promise<void> {
 	let size = parts.reduce((sum, part) => sum + part.bytes, 0);
