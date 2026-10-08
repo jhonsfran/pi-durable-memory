@@ -1,7 +1,6 @@
 export { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong } from "./core/errors.js";
 export { formatMemoryContext } from "./core/format.js";
 export { createMemory } from "./core/memory.js";
-export { buildSummaryPrompt } from "./core/summary-prompt.js";
 export type {
 	CompactOptions,
 	CompactResult,
@@ -15,10 +14,12 @@ export type {
 	MemoryRange,
 	MemoryStore,
 	MemorySummarizer,
+	MergeJob,
 	NoteInput,
 	RecallMatch,
 	RecallOptions,
-	SummarizeInput,
+	SummaryRequest,
+	SummaryTurn,
 } from "./core/types.js";
 export { createRetrievalAdmission } from "./pi/admission.js";
 export type { AdmissionJudge, AdmissionNeighbor, JudgeInput, JudgeVerdict } from "./pi/admission.js";

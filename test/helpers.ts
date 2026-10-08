@@ -1,27 +1,35 @@
 import { createMemory } from "../src/index.js";
-import type { Memory, MemoryLimits, MemoryStore, MemorySummarizer } from "../src/index.js";
+import type { Memory, MemoryLimits, MemoryStore, MemorySummarizer, SummaryRequest } from "../src/index.js";
 import type { SqlDatabase } from "../src/sqlite/database.js";
 import { createSqliteMemoryStore } from "../src/sqlite/store.js";
 import { openNodeSqlite } from "./node-sqlite.js";
 
-/** Bracket-joins the children's content, so every summary is a literal function of its inputs. */
+/** The two lines a request asks to merge: the last two lines of the step, the second block of the first turn. */
+export function mergedLines(request: SummaryRequest): string[] {
+	const [first] = request.turns;
+	const step = first?.role === "user" ? first.blocks[1] : undefined;
+	if (step === undefined) throw new Error("the request has no step");
+	return step.split("\n").slice(-2);
+}
+
+/** Bracket-joins the two lines, so every summary is a literal function of its inputs. */
 export const joinSummarizer: MemorySummarizer = {
-	async summarize({ items }) {
-		return `[${items.map((item) => item.content).join(" ")}]`;
+	async complete(request) {
+		return `[${mergedLines(request).join(" ")}]`;
 	},
 };
 
-/** Writes `mA..mB` from the first memory its children mention to the last, so every summary names the block it covers. */
+/** Writes `mA..mB` from the first memory the two lines mention to the last, so every summary names the block it covers. */
 export const spanSummarizer: MemorySummarizer = {
-	async summarize({ items }) {
-		const ids = items.map((item) => item.content).join(" ").match(/m\d+/g) ?? [];
+	async complete(request) {
+		const ids = mergedLines(request).join(" ").match(/m\d+/g) ?? [];
 		return `${ids[0]}..${ids.at(-1)}`;
 	},
 };
 
 /** Fails the test that reaches it: for paths that must not call a model. */
 export const refusingSummarizer: MemorySummarizer = {
-	async summarize() {
+	async complete() {
 		throw new Error("the summarizer was called");
 	},
 };

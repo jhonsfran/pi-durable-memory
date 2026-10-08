@@ -1,12 +1,8 @@
 import { defineMemoryObject } from "../../src/cloudflare/index.js";
 
-/** Bracket-joins the children's content, so every summary is a literal function of its inputs. */
+/** The tests' short notes always merge without a model, so this summarizer only has to exist for the alarm to run. */
 export const MemoryObject = defineMemoryObject<Cloudflare.Env>({
-	summarizer: () => ({
-		async summarize({ items }) {
-			return `[${items.map((item) => item.content).join(" ")}]`;
-		},
-	}),
+	summarizer: () => ({ complete: async () => "summary" }),
 	mergesPerAlarm: 2,
 });
 

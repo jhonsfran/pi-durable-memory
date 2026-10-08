@@ -69,14 +69,13 @@ describe("memory Durable Object", () => {
 		expect(await stub.nextMerge()).toEqual({
 			startId: 0,
 			endId: 1,
-			items: [
-				{ startId: 0, endId: 0, content: "m0" },
-				{ startId: 1, endId: 1, content: "m1" },
-			],
-			maxBytes: 4,
+			request: {
+				system: expect.any(String),
+				turns: [{ role: "user", blocks: ["<memory>\nm0\nm1\n</memory>", expect.stringMatching(/in at most 4 bytes:\nm0\nm1$/)] }],
+			},
 		});
-		for (let input = await stub.nextMerge(); input !== undefined; input = await stub.nextMerge()) {
-			expect(await stub.commitMerge(input, `c${input.startId}${input.endId}`)).toBe(true);
+		for (let job = await stub.nextMerge(); job !== undefined; job = await stub.nextMerge()) {
+			expect(await stub.commitMerge(job, `c${job.startId}${job.endId}`)).toBe(true);
 		}
 		expect(await stub.pending()).toBe(0);
 		expect((await stub.wake()).items).toEqual([

@@ -1,29 +1,25 @@
 import { blockAt, blockLevel, blockSize, childrenOf, isAlignedBlock, label } from "./block.js";
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong } from "./errors.js";
-import type { CreateMemoryOptions, Memory, MemoryEntry, MemoryItem, MemoryLimits, MemoryNode, MemoryRange, SummarizeInput } from "./types.js";
+import { summarize, summaryRequest } from "./summary.js";
+import { byteLength, oneLine } from "./text.js";
+import type { CreateMemoryOptions, Memory, MemoryEntry, MemoryItem, MemoryLimits, MemoryNode, MemoryRange, SummaryRequest } from "./types.js";
 import { foldView } from "./view.js";
 import type { FoldSource, Part } from "./view.js";
 
 const DEFAULT_LIMITS: MemoryLimits = { maxEntryBytes: 280, summaryBytes: 512, viewBytes: 16_384 };
 const DEFAULT_RECALL_LIMIT = 10;
 
-const encoder = new TextEncoder();
-
-const byteLength = (text: string): number => encoder.encode(text).length;
-
-/** A memory is one line: whitespace runs containing a line break collapse to one space. */
-function normalizeEntry(text: string): string {
-	const line = text.replace(/\s*[\r\n]+\s*/g, " ").trim();
-	if (line.length === 0) throw new MemoryEntryEmpty();
-	return line;
+/** A block whose two children do not fit one line together, so a model must merge them. */
+interface ModelBlock extends MemoryRange {
+	readonly level: number;
+	readonly children: readonly [string, string];
 }
 
-/** Longest prefix of at most `maxBytes` UTF-8 bytes that ends on a character boundary. */
-function truncateUtf8(text: string, maxBytes: number): string {
-	if (byteLength(text) <= maxBytes) return text;
-	// `encodeInto` never writes a partial code point, so `read` lands on a character boundary.
-	const { read } = encoder.encodeInto(text, new Uint8Array(maxBytes));
-	return text.slice(0, read);
+/** A memory or summary is one line, and never empty. */
+function normalizeEntry(text: string): string {
+	const line = oneLine(text);
+	if (line.length === 0) throw new MemoryEntryEmpty();
+	return line;
 }
 
 const nodeKey = (level: number, startId: number): string => `${level}:${startId}`;
@@ -32,6 +28,8 @@ const nodeKey = (level: number, startId: number): string => `${level}:${startId}
 const live = (entry: MemoryEntry): boolean => entry.supersededBy === undefined;
 
 const shown = (item: MemoryItem | undefined): item is MemoryItem => item !== undefined;
+
+const startOf = (item: MemoryItem): number => (item.type === "memory" ? item.id : item.startId);
 
 /** The first memory id a view does not cover. */
 const endOf = (view: readonly MemoryRange[]): number => (view.at(-1)?.endId ?? -1) + 1;
@@ -78,11 +76,18 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		});
 	}
 
-	/** The stored view, then one part per memory no fold has reached yet. */
-	async function currentView(total: number): Promise<MemoryRange[]> {
+	/** What `wake()` shows: the stored view, then one memory per id no fold has reached yet. */
+	async function viewItems(total: number): Promise<MemoryItem[]> {
 		const stored = await store.readView();
 		const end = endOf(stored);
-		return [...stored, ...Array.from({ length: Math.max(0, total - end) }, (_, i) => blockAt(0, end + i))];
+		const parts = [...stored, ...Array.from({ length: Math.max(0, total - end) }, (_, i) => blockAt(0, end + i))];
+		return (await read(parts)).filter(shown);
+	}
+
+	/** The request for `block`, with the lines of `view` that start inside or before it as context. */
+	function requestFor(view: readonly MemoryItem[], block: ModelBlock): SummaryRequest {
+		const context = view.filter((item) => startOf(item) <= block.endId).map((item) => item.content);
+		return summaryRequest(context, block.children, summaryBytes);
 	}
 
 	/** Sizes for one fold: the memories and nodes given are known, any other built node is read on first use. */
@@ -144,26 +149,20 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		return run;
 	}
 
-	/** The two children of a block, oldest first: two memories at level 1, two nodes one level down above it. A superseded memory reads as "". */
-	async function children(level: number, block: MemoryRange): Promise<SummarizeInput["items"]> {
-		if (level === 1) {
-			const entries = await store.getMemories(block);
-			return entries.map((entry) => ({ startId: entry.id, endId: entry.id, content: live(entry) ? entry.content : "" }));
-		}
-		const halves = childrenOf(block);
-		const nodes = await store.getNodes(halves.map((half) => ({ level: level - 1, startId: half.startId })));
-		return halves.map((half) => {
-			const node = nodes.find((candidate) => candidate.startId === half.startId);
-			if (node === undefined) {
-				throw new Error(`Cannot summarize ${label(block)}: its half ${label(half)} has no summary at level ${level - 1}`);
-			}
-			return { startId: half.startId, endId: half.endId, content: node.summary };
-		});
+	/** The texts of a block's two children, oldest first: two memories at level 1, two nodes one level down above it. A superseded memory reads as "". */
+	async function childTexts(level: number, block: MemoryRange): Promise<readonly [string, string]> {
+		const [left, right] = childrenOf(block);
+		const texts = new Map<number, string>();
+		if (level === 1) for (const entry of await store.getMemories(block)) texts.set(entry.id, live(entry) ? entry.content : "");
+		else for (const node of await store.getNodes([left, right].map((half) => ({ level: level - 1, startId: half.startId })))) texts.set(node.startId, node.summary);
+		const [a, b] = [texts.get(left.startId), texts.get(right.startId)];
+		if (a === undefined || b === undefined) throw new Error(`Cannot merge ${label(block)}: a child is missing`);
+		return [a, b];
 	}
 
 	/** The node text when no model is needed: the non-empty children joined, if that fits `summaryBytes` or at most one is non-empty. */
-	function freeMerge(items: SummarizeInput["items"]): string | undefined {
-		const texts = items.map((item) => item.content).filter((text) => text.length > 0);
+	function freeMerge(children: readonly string[]): string | undefined {
+		const texts = children.filter((text) => text.length > 0);
 		const joined = texts.join(" / ");
 		return texts.length < 2 || byteLength(joined) <= summaryBytes ? joined : undefined;
 	}
@@ -187,11 +186,12 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 	}
 
 	/**
-	 * `nextMerge()` plus the number of free merges it stored on the way: a block that needs no model
-	 * is stored here instead of being returned. `budget` caps those so `compact()` honors
-	 * `maxMerges`. A lost `appendNode` race is left for the next read of the cursor to see.
+	 * The next block that needs a model, plus the number of free merges stored on the way: a block
+	 * that needs no model is stored here instead of being returned. `budget` caps those so
+	 * `compact()` honors `maxMerges`. A lost `appendNode` race is left for the next read of the
+	 * cursor to see.
 	 */
-	async function nextPending(budget: number): Promise<{ input: SummarizeInput | undefined; free: number }> {
+	async function nextPending(budget: number): Promise<{ block: ModelBlock | undefined; free: number }> {
 		const total = await store.count();
 		let free = 0;
 		let lost: string | undefined;
@@ -202,18 +202,13 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 			const key = nodeKey(level, block.startId);
 			// A lost race leaves the node present, so the cursor moves on. If it did not, the store broke its contract; stop rather than spin.
 			if (key === lost) break;
-			const items = await children(level, block);
-			const summary = freeMerge(items);
-			if (summary === undefined) return { input: { ...block, items, maxBytes: summaryBytes }, free };
+			const children = await childTexts(level, block);
+			const summary = freeMerge(children);
+			if (summary === undefined) return { block: { ...block, level, children }, free };
 			if (await store.appendNode({ level, ...block, summary })) free++;
 			else lost = key;
 		}
-		return { input: undefined, free };
-	}
-
-	async function appendSummary(range: MemoryRange, summary: string): Promise<boolean> {
-		assertBlock(range);
-		return store.appendNode({ level: blockLevel(range), startId: range.startId, endId: range.endId, summary: truncateUtf8(normalizeEntry(summary), summaryBytes) });
+		return { block: undefined, free };
 	}
 
 	return {
@@ -235,8 +230,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 
 		async wake() {
 			const total = await store.count();
-			const items = (await read(await currentView(total))).filter(shown);
-			return { items, total };
+			return { items: await viewItems(total), total };
 		},
 
 		async recall(query, options) {
@@ -256,13 +250,15 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 			let merged = 0;
 			let lost: string | undefined;
 			while (merged < maxMerges) {
-				const { input, free } = await nextPending(maxMerges - merged);
+				const { block, free } = await nextPending(maxMerges - merged);
 				merged += free;
-				if (input === undefined || summarizer === undefined || merged >= maxMerges) break;
-				const key = nodeKey(blockLevel(input), input.startId);
+				if (block === undefined || summarizer === undefined || merged >= maxMerges) break;
+				const key = nodeKey(block.level, block.startId);
 				// Same guard as `nextPending`: a lost commit must have left the node present, or the store broke its contract.
 				if (key === lost) break;
-				if (await appendSummary(input, await summarizer.summarize(input))) merged++;
+				const request = requestFor(await viewItems(await store.count()), block);
+				const summary = await summarize(summarizer, request, summaryBytes);
+				if (await store.appendNode({ level: block.level, startId: block.startId, endId: block.endId, summary })) merged++;
 				else lost = key;
 			}
 			await fold();
@@ -274,13 +270,18 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		},
 
 		async nextMerge() {
-			const { input, free } = await nextPending(Number.POSITIVE_INFINITY);
+			const { block, free } = await nextPending(Number.POSITIVE_INFINITY);
 			if (free > 0) await fold();
-			return input;
+			if (block === undefined) return undefined;
+			return { startId: block.startId, endId: block.endId, request: requestFor(await viewItems(await store.count()), block) };
 		},
 
 		async commitMerge(range, summary) {
-			const stored = await appendSummary(range, summary);
+			assertBlock(range);
+			const line = normalizeEntry(summary);
+			const bytes = byteLength(line);
+			if (bytes > summaryBytes) throw new MemoryEntryTooLong(bytes, summaryBytes);
+			const stored = await store.appendNode({ level: blockLevel(range), startId: range.startId, endId: range.endId, summary: line });
 			if (stored) await fold();
 			return stored;
 		},

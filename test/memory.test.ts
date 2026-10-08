@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong, formatMemoryContext } from "../src/index.js";
-import type { MemorySummarizer, SummarizeInput } from "../src/index.js";
-import { noteMany, openFixture, refusingSummarizer } from "./helpers.js";
+import type { MemorySummarizer } from "../src/index.js";
+import { mergedLines, noteMany, openFixture, refusingSummarizer, spanSummarizer } from "./helpers.js";
 
 describe("memory", () => {
 	it("notes with sourceIds, compacts, wakes with both memories and recalls the second", async () => {
@@ -41,26 +41,26 @@ describe("memory", () => {
 	});
 
 	it("builds every node from its two children, joining them without a model while they fit", async () => {
-		const inputs: SummarizeInput[] = [];
+		const merged: string[][] = [];
 		const summarizer: MemorySummarizer = {
-			async summarize(input) {
-				inputs.push(input);
-				return `s${input.startId}-${input.endId}`;
+			async complete(request) {
+				merged.push(mergedLines(request));
+				return spanSummarizer.complete(request);
 			},
 		};
 		const { memory, store } = await openFixture({ summarizer, limits: { summaryBytes: 21 } });
 		await noteMany(memory, 16);
 		expect(await memory.compact()).toEqual({ merged: 15, pending: 0 });
-		expect(inputs).toEqual([
-			{ startId: 0, endId: 7, maxBytes: 21, items: [{ startId: 0, endId: 3, content: "m0 / m1 / m2 / m3" }, { startId: 4, endId: 7, content: "m4 / m5 / m6 / m7" }] },
-			{ startId: 8, endId: 15, maxBytes: 21, items: [{ startId: 8, endId: 11, content: "m8 / m9 / m10 / m11" }, { startId: 12, endId: 15, content: "m12 / m13 / m14 / m15" }] },
+		expect(merged).toEqual([
+			["m0 / m1 / m2 / m3", "m4 / m5 / m6 / m7"],
+			["m8 / m9 / m10 / m11", "m12 / m13 / m14 / m15"],
 		]);
 		const keys = [1, 2, 3, 4].flatMap((level) => Array.from({ length: 16 / 2 ** level }, (_, k) => ({ level, startId: k * 2 ** level })));
 		expect((await store.getNodes(keys)).map((node) => node.summary)).toEqual([
 			"m0 / m1", "m2 / m3", "m4 / m5", "m6 / m7", "m8 / m9", "m10 / m11", "m12 / m13", "m14 / m15",
 			"m0 / m1 / m2 / m3", "m4 / m5 / m6 / m7", "m8 / m9 / m10 / m11", "m12 / m13 / m14 / m15",
-			"s0-7", "s8-15",
-			"s0-7 / s8-15",
+			"m0..m7", "m8..m15",
+			"m0..m7 / m8..m15",
 		]);
 	});
 
@@ -106,57 +106,25 @@ describe("memory", () => {
 		]);
 	});
 
-	it("normalizes and truncates summaries on a character boundary", async () => {
-		const { memory, store } = await openFixture({
-			summarizer: { async summarize() { return `  line one\n line two ${"é".repeat(40)}`; } },
-			limits: { summaryBytes: 64 },
-		});
-		await memory.note({ content: "a".repeat(40), createdAt: 0 });
-		await memory.note({ content: "b".repeat(40), createdAt: 1 });
-		await memory.compact();
-		const [node] = await store.getNodes([{ level: 1, startId: 0 }]);
-		expect(node?.summary).toBe(`line one line two ${"é".repeat(23)}`);
-		expect(new TextEncoder().encode(node!.summary).length).toBe(64);
-	});
-
 	it("hands out the blocks that need a model in build order through nextMerge and stores what commitMerge is given", async () => {
-		const { memory, store } = await openFixture({ limits: { summaryBytes: 4 } });
+		const { memory, store } = await openFixture({ summarizer: null, limits: { summaryBytes: 4 } });
 		await noteMany(memory, 4);
-		expect(await memory.nextMerge()).toEqual({
-			startId: 0,
-			endId: 1,
-			items: [
-				{ startId: 0, endId: 0, content: "m0" },
-				{ startId: 1, endId: 1, content: "m1" },
-			],
-			maxBytes: 4,
-		});
-		expect(await memory.commitMerge({ startId: 0, endId: 1 }, "p01")).toBe(true);
-		expect(await memory.nextMerge()).toEqual({
-			startId: 2,
-			endId: 3,
-			items: [
-				{ startId: 2, endId: 2, content: "m2" },
-				{ startId: 3, endId: 3, content: "m3" },
-			],
-			maxBytes: 4,
-		});
-		expect(await memory.commitMerge({ startId: 2, endId: 3 }, "p23")).toBe(true);
-		expect(await memory.nextMerge()).toEqual({
-			startId: 0,
-			endId: 3,
-			items: [
-				{ startId: 0, endId: 1, content: "p01" },
-				{ startId: 2, endId: 3, content: "p23" },
-			],
-			maxBytes: 4,
-		});
-		expect(await memory.commitMerge({ startId: 0, endId: 3 }, "all")).toBe(true);
-		expect(await memory.nextMerge()).toBeUndefined();
+		const jobs: string[][] = [];
+		for (let job = await memory.nextMerge(); job !== undefined; job = await memory.nextMerge()) {
+			jobs.push([`${job.startId}-${job.endId}`, ...mergedLines(job.request)]);
+			expect(await memory.commitMerge(job, `p${job.startId}${job.endId}`)).toBe(true);
+		}
+		expect(jobs).toEqual([
+			["0-1", "m0", "m1"],
+			["2-3", "m2", "m3"],
+			["0-3", "p01", "p23"],
+		]);
 		expect(await memory.pending()).toBe(0);
-		expect(await memory.commitMerge({ startId: 0, endId: 1 }, "again")).toBe(false);
+		expect(await memory.commitMerge({ startId: 0, endId: 1 }, "x")).toBe(false);
 		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "p01" }]);
 		await expect(memory.commitMerge({ startId: 1, endId: 2 }, "x")).rejects.toThrow(InvalidRange);
+		await expect(memory.commitMerge({ startId: 0, endId: 1 }, " \n ")).rejects.toThrow(MemoryEntryEmpty);
+		await expect(memory.commitMerge({ startId: 0, endId: 1 }, "toolong")).rejects.toThrow(new MemoryEntryTooLong(7, 4));
 	});
 
 	it("refuses a commit for a block that is not next at its level, so the blocks before it stay buildable", async () => {

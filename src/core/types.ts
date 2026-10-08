@@ -82,21 +82,29 @@ export interface CompactResult {
 export interface MemoryLimits {
 	/** Longest memory, in UTF-8 bytes. Default 280. */
 	readonly maxEntryBytes: number;
-	/** Target size of a summary, in UTF-8 bytes. Two children that fit in it together are joined without a model. A model summary over it is truncated to it. Default 512. */
+	/** Target size of a summary, in UTF-8 bytes. Two children that fit in it together are joined without a model. The model is asked for at most this much, and `commitMerge()` refuses more. Default 512. */
 	readonly summaryBytes: number;
 	/** Budget of `wake()`: the UTF-8 bytes of its items' text. The view merges old lines while it is over, once their parents are built. Default 16,384. */
 	readonly viewBytes: number;
 }
 
-/** What a summarizer sees: the block to merge and its two children, two memories or two child summaries. */
-export interface SummarizeInput extends MemoryRange {
-	/** The two children, oldest first. A memory has `startId === endId`. */
-	readonly items: ReadonlyArray<MemoryRange & { readonly content: string }>;
-	readonly maxBytes: number;
+/** One summarizer call: a constant system prompt, then a conversation that grows by one exchange per size retry. */
+export interface SummaryRequest {
+	readonly system: string;
+	readonly turns: readonly SummaryTurn[];
 }
 
+/** The first user turn holds two blocks, the context and the step. Each retry adds the model's line and one user block of feedback. */
+export type SummaryTurn = { readonly role: "user"; readonly blocks: readonly string[] } | { readonly role: "assistant"; readonly text: string };
+
 export interface MemorySummarizer {
-	summarize(input: SummarizeInput): Promise<string>;
+	/** The model's reply to the request. Put a cache breakpoint after `turns[0].blocks[0]` (the context) when the provider supports it. */
+	complete(request: SummaryRequest): Promise<string>;
+}
+
+/** A block ready to summarize and the request the core would send for it. */
+export interface MergeJob extends MemoryRange {
+	readonly request: SummaryRequest;
 }
 
 /** One scope's memory. Every method is safe to call concurrently with the others and to retry after a crash. */
@@ -119,12 +127,16 @@ export interface Memory {
 	/** Merges that `compact()` would perform now. */
 	pending(): Promise<number>;
 	/**
-	 * The next block that needs a model, with its two children, or `undefined` when none does. Blocks
-	 * that need no model are stored on the way. Together with `commitMerge()` this lets a caller supply
-	 * the summary itself; `compact()` is the same two steps with the injected summarizer in between.
+	 * The next block that needs a model, with the request `compact()` would send for it, or
+	 * `undefined` when none does. Blocks that need no model are stored on the way. Together with
+	 * `commitMerge()` this lets a caller run the model itself.
 	 */
-	nextMerge(): Promise<SummarizeInput | undefined>;
-	/** Store the summary for a block `nextMerge()` returned. False when the block is built already or is not the next one at its level. The summary is normalized and truncated like a note. */
+	nextMerge(): Promise<MergeJob | undefined>;
+	/**
+	 * Store the summary for a block `nextMerge()` returned, made one line like a note. Throws
+	 * `MemoryEntryEmpty` for an empty one and `MemoryEntryTooLong` over `summaryBytes`. False when the
+	 * block is built already or is not the next one at its level.
+	 */
 	commitMerge(range: MemoryRange, summary: string): Promise<boolean>;
 }
 
