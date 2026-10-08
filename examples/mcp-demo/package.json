@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm -w build && wrangler dev",
-    "typecheck": "pnpm -w build && tsc --noEmit"
+    "typecheck": "pnpm -w build && tsc --noEmit",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
@@ -14,6 +15,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261006.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "typescript": "^5.9.0",
     "wrangler": "^4.124.0"
   }
