@@ -90,7 +90,6 @@ describe("memory Durable Object", () => {
 		const noted = Date.now();
 		await noteMany(stub, 2);
 		let retryAt = await alarm();
-		// The alarm set by `note` fires on its own a millisecond later; its failure moves the alarm to the retry.
 		while (retryAt === null || retryAt < noted + 5_000) {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 			retryAt = await alarm();

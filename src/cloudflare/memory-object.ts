@@ -25,7 +25,6 @@ export type MemoryObjectClass<Env> = typeof DurableObject<Env> & (new (ctx: Dura
 /** The Durable Object id is the scope; the store's scope column exists only so the test suites can hold several scopes in one database. */
 const SCOPE = "self";
 
-/** Wait before an alarm retries a failed summary (spec 4.1). */
 const RETRY_MS = 10_000;
 
 /**
@@ -38,7 +37,6 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 
 	return class MemoryObject extends DurableObject<Env> implements Memory {
 		private memory: Promise<Memory> | undefined;
-		/** Blocks whose failure this instance has logged, so a block that keeps failing is logged once. */
 		private readonly reported = new Set<string>();
 
 		private open(): Promise<Memory> {

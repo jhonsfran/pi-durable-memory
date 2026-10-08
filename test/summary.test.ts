@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { MemorySummarizer, SummaryRequest } from "../src/index.js";
 import { openFixture } from "./helpers.js";
 
-/** Answers the scripted replies in order and keeps every request it was sent. */
 function scripted(replies: readonly string[]) {
 	const requests: SummaryRequest[] = [];
 	const summarizer: MemorySummarizer = {

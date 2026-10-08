@@ -78,7 +78,7 @@ export interface CompactResult {
 	readonly merged: number;
 	/** Nodes the log could have that are not built yet. */
 	readonly pending: number;
-	/** Blocks whose summary failed in this call, each once, with the error message. Plain data, so it crosses Durable Object RPC. The next call tries them again. */
+	/** Blocks whose summary failed in this call, each once, with the error message. The next call tries them again. */
 	readonly failed: readonly { readonly startId: number; readonly endId: number; readonly message: string }[];
 }
 

@@ -4,7 +4,6 @@ import type { SqlDatabase } from "../src/sqlite/database.js";
 import { createSqliteMemoryStore } from "../src/sqlite/store.js";
 import { openNodeSqlite } from "./node-sqlite.js";
 
-/** The two lines a request asks to merge: the last two lines of the step, the second block of the first turn. */
 export function mergedLines(request: SummaryRequest): string[] {
 	const [first] = request.turns;
 	const step = first?.role === "user" ? first.blocks[1] : undefined;
@@ -12,14 +11,12 @@ export function mergedLines(request: SummaryRequest): string[] {
 	return step.split("\n").slice(-2);
 }
 
-/** Bracket-joins the two lines, so every summary is a literal function of its inputs. */
 export const joinSummarizer: MemorySummarizer = {
 	async complete(request) {
 		return `[${mergedLines(request).join(" ")}]`;
 	},
 };
 
-/** Writes `mA..mB` from the first memory the two lines mention to the last, so every summary names the block it covers. */
 export const spanSummarizer: MemorySummarizer = {
 	async complete(request) {
 		const ids = mergedLines(request).join(" ").match(/m\d+/g) ?? [];
@@ -27,7 +24,6 @@ export const spanSummarizer: MemorySummarizer = {
 	},
 };
 
-/** Fails the test that reaches it: for paths that must not call a model. */
 export const refusingSummarizer: MemorySummarizer = {
 	async complete() {
 		throw new Error("the summarizer was called");
@@ -63,7 +59,6 @@ export async function noteMany(memory: Memory, count: number): Promise<void> {
 	for (let id = 0; id < count; id++) await memory.note({ content: `m${id}`, createdAt: 1_700_000_000_000 + id });
 }
 
-/** Inserts every node a log of `count` memories can have, straight into the table, each summarized as `summary(level, startId)`. */
 export async function seedNodesBySql(db: SqlDatabase, scope: string, count: number, summary: (level: number, startId: number) => string): Promise<void> {
 	await db.transaction(async (tx) => {
 		for (let level = 1; 2 ** level <= count; level++) {

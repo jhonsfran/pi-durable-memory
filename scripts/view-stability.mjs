@@ -1,7 +1,3 @@
-// Replays N notes into one scope, compacting after each, and measures how much of the rendered
-// wake survives byte-for-byte from one note to the next. A provider prompt cache can reuse only
-// the shared prefix, so the shared-prefix ratio is the number this change is supposed to move.
-// Usage: pnpm build && node scripts/view-stability.mjs <repo-dir> [notes=2000] [viewBytes=24000]
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
@@ -51,7 +47,6 @@ function pseudo(seed, bytes) {
 	return words.join(" ").slice(0, bytes).trim();
 }
 
-// Both summarizer protocols, so the same script measures the old code and the new.
 const summarizer = {
 	async summarize(input) {
 		return pseudo(input.items.map((item) => item.content).join("|"), 250);

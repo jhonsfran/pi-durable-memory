@@ -8,10 +8,8 @@ import type { FoldSource, Part } from "./view.js";
 
 const DEFAULT_LIMITS: MemoryLimits = { maxEntryBytes: 280, summaryBytes: 512, viewBytes: 16_384 };
 const DEFAULT_RECALL_LIMIT = 10;
-/** Blocks one compaction round takes, so at most this many summarizer conversations run at once (spec 4.1). */
 const JOBS = 8;
 
-/** A block whose children are built. `summary` is its text when no model is needed (a free merge), `undefined` when a model must merge the children. */
 interface Job extends MemoryRange {
 	readonly level: number;
 	readonly children: readonly [string, string];
@@ -20,7 +18,6 @@ interface Job extends MemoryRange {
 
 type Failure = CompactResult["failed"][number];
 
-/** A memory or summary is one line, and never empty. */
 function normalizeEntry(text: string): string {
 	const line = oneLine(text);
 	if (line.length === 0) throw new MemoryEntryEmpty();
@@ -36,7 +33,6 @@ const shown = (item: MemoryItem | undefined): item is MemoryItem => item !== und
 
 const startOf = (item: MemoryItem): number => (item.type === "memory" ? item.id : item.startId);
 
-/** The first memory id a view does not cover. */
 const endOf = (view: readonly MemoryRange[]): number => (view.at(-1)?.endId ?? -1) + 1;
 
 function assertBlock(range: MemoryRange): void {
@@ -59,7 +55,6 @@ function contiguousRuns(blocks: readonly MemoryRange[]): MemoryRange[] {
 export function createMemory({ store, summarizer, limits }: CreateMemoryOptions): Memory {
 	const { maxEntryBytes, summaryBytes, viewBytes } = { ...DEFAULT_LIMITS, ...limits };
 
-	/** Each block as `wake()` shows it, in the given order, with one read per kind; `undefined` for a superseded memory or an empty summary. */
 	async function read(blocks: readonly MemoryRange[]): Promise<(MemoryItem | undefined)[]> {
 		const singles = blocks.filter((block) => blockSize(block) === 1);
 		const wide = blocks.filter((block) => blockSize(block) > 1);
@@ -81,7 +76,6 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		});
 	}
 
-	/** What `wake()` shows: the stored view, then one memory per id no fold has reached yet. */
 	async function viewItems(stored: readonly MemoryRange[], total: number): Promise<MemoryItem[]> {
 		const end = endOf(stored);
 		const parts = [...stored, ...Array.from({ length: Math.max(0, total - end) }, (_, i) => blockAt(0, end + i))];
@@ -90,13 +84,11 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 
 	const currentView = async (): Promise<MemoryItem[]> => viewItems(await store.readView(), await store.count());
 
-	/** The request for `job`, with the lines of `view` that start inside or before it as context. */
 	function requestFor(view: readonly MemoryItem[], job: Job): SummaryRequest {
 		const context = view.filter((item) => startOf(item) <= job.endId).map((item) => item.content);
 		return summaryRequest(context, job.children, summaryBytes);
 	}
 
-	/** Sizes for one fold: the memories and nodes given are known, any other built node is read on first use. */
 	function foldSource(levelLengths: readonly number[], memories: readonly MemoryEntry[], nodes: readonly MemoryNode[]): FoldSource {
 		const sizes = new Map<string, number>();
 		for (const entry of memories) sizes.set(nodeKey(0, entry.id), live(entry) ? byteLength(entry.content) : 0);
@@ -114,7 +106,6 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		};
 	}
 
-	/** Brings the stored view up to the log and the built nodes, then writes only what changed. Idempotent: a fold after a crash appends what the last one missed. */
 	async function foldOnce(): Promise<void> {
 		const total = await store.count();
 		const stored = await store.readView();
@@ -122,7 +113,6 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		const levels = Array.from({ length: total < 2 ? 1 : Math.floor(Math.log2(total)) + 1 }, (_, level) => level);
 		let source: FoldSource;
 		if (stored.length === 0 && total > 0) {
-			// No stored view: a new scope, or one written before the view existed. One read of the whole log and tree replaces a read per memory.
 			const [entries, nodes] = await Promise.all([store.getMemories({ startId: 0, endId: total - 1 }), store.listNodes()]);
 			const levelLengths = levels.map(() => 0);
 			for (const node of nodes) levelLengths[node.level] = Math.max(levelLengths[node.level] ?? 0, node.startId / 2 ** node.level + 1);
@@ -148,14 +138,12 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 	}
 
 	let folding: Promise<void> = Promise.resolve();
-	/** One fold at a time, so no fold writes a change computed from a view another fold has moved since. */
 	function fold(): Promise<void> {
 		const run = folding.then(foldOnce);
 		folding = run.catch(() => {});
 		return run;
 	}
 
-	/** The texts of a block's two children, oldest first: two memories at level 1, two nodes one level down above it. A superseded memory reads as "". */
 	async function childTexts(level: number, block: MemoryRange): Promise<readonly [string, string]> {
 		const [left, right] = childrenOf(block);
 		const texts = new Map<number, string>();
@@ -166,7 +154,6 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		return [a, b];
 	}
 
-	/** The node text when no model is needed: the non-empty children joined, if that fits `summaryBytes` or at most one is non-empty. */
 	function freeMerge(children: readonly string[]): string | undefined {
 		const texts = children.filter((text) => text.length > 0);
 		const joined = texts.join(" / ");
@@ -181,12 +168,6 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		return count;
 	}
 
-	/**
-	 * Up to `limit` blocks whose children are built, by level and then position. Nodes form a dense
-	 * prefix per level, so `levelLength` is each level's cursor. A level stops at a block in `skip`,
-	 * and at a block that needs a model when `models` is false, because `appendNode` would refuse
-	 * every block after it.
-	 */
 	async function readyJobs(limit: number, models: boolean, skip: ReadonlySet<string>): Promise<Job[]> {
 		const total = await store.count();
 		const jobs: Job[] = [];
@@ -206,12 +187,6 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		return jobs;
 	}
 
-	/**
-	 * One compaction round (spec 4.1): the jobs `readyJobs` picks, free merges at once and model
-	 * merges concurrently, then every result stored in level and position order. A failed job goes to
-	 * `failed` and `skip`. The later blocks at its level are refused by `appendNode`, and the next
-	 * round passes over its level. Returns the number of nodes stored.
-	 */
 	async function round(limit: number, models: boolean, skip: Set<string>, failed: Failure[]): Promise<number> {
 		const jobs = await readyJobs(limit, models, skip);
 		const view = jobs.some((job) => job.summary === undefined) ? await currentView() : [];
@@ -258,7 +233,6 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 
 		async wake() {
 			let [stored, total] = await Promise.all([store.readView(), store.count()]);
-			// A log written before the view existed has no stored view yet: fold it once rather than show every memory.
 			if (endOf(stored) < total) {
 				await fold();
 				[stored, total] = await Promise.all([store.readView(), store.count()]);

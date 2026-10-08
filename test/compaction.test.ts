@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { Memory, MemorySummarizer } from "../src/index.js";
 import { mergedLines, noteMany, openFixture, refusingSummarizer } from "./helpers.js";
 
-/** `count` notes of 7 bytes each, so with `summaryBytes: 12` two of them never fit one line and every level-1 merge needs the model. */
 async function noteLong(memory: Memory, count: number): Promise<void> {
 	for (let id = 0; id < count; id++) await memory.note({ content: `note-${String(id).padStart(2, "0")}`, createdAt: id });
 }

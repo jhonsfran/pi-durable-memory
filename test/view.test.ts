@@ -6,13 +6,11 @@ import { noteMany, openFixture, refusingSummarizer, seedMemoriesBySql, seedNodes
 const rangeOf = (item: MemoryItem): MemoryRange => (item.type === "memory" ? { startId: item.id, endId: item.id } : { startId: item.startId, endId: item.endId });
 const bytes = (context: MemoryContext): number => context.items.reduce((sum, item) => sum + new TextEncoder().encode(item.content).length, 0);
 
-/** The first and last memory an item's text names. A memory names itself; a summary from `spanSummarizer` or a free merge names its block's ends. */
 function ends(item: MemoryItem): [string | undefined, string | undefined] {
 	const ids = item.content.match(/m\d+/g) ?? [];
 	return [ids[0], ids.at(-1)];
 }
 
-/** Ranges that start where the previous one ended, from 0 to `total`. */
 function gaps(parts: readonly MemoryRange[], total: number): string[] {
 	const found: string[] = [];
 	let next = 0;

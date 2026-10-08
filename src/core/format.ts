@@ -13,7 +13,6 @@ function formatItem(item: MemoryItem): string {
 	}
 }
 
-/** One line per item, as the model reads them: `#12 text`, `#8-15 text`. */
 export function formatMemoryItems(items: readonly MemoryItem[]): string {
 	return items.map(formatItem).join("\n");
 }

@@ -2,7 +2,6 @@ const encoder = new TextEncoder();
 
 export const byteLength = (text: string): number => encoder.encode(text).length;
 
-/** Whitespace runs that contain a line break collapse to one space, then the ends are trimmed. */
 export const oneLine = (text: string): string => text.replace(/\s*[\r\n]+\s*/g, " ").trim();
 
 /** Longest prefix of at most `maxBytes` UTF-8 bytes that ends on a character boundary. */
