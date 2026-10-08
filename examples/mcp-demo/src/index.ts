@@ -11,7 +11,7 @@ interface Env {
 
 export const MemoryObject = defineMemoryObject<Env>({});
 
-const MEMORY_PATH = /^\/m\/([A-Za-z0-9_-]{22})(\/wake\.json|\/zoom\.json)?$/;
+const MEMORY_PATH = /^\/m\/([A-Za-z0-9_-]{22})(\/wake\.json|\/zoom\.json|\/destroy)?$/;
 
 const html = (page: string): Response => new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } });
 
@@ -33,6 +33,11 @@ export default {
 				if (error instanceof Error && error.name === "InvalidRange") return new Response(error.message, { status: 400 });
 				throw error;
 			}
+		}
+		if (file === "/destroy") {
+			if (request.method !== "POST") return new Response("Use POST", { status: 405, headers: { allow: "POST" } });
+			await env.MEMORY.get(env.MEMORY.idFromName(id)).destroy();
+			return new Response(null, { status: 204 });
 		}
 		if (request.method === "GET" && request.headers.get("accept")?.includes("text/html")) return html(memoryPage);
 		return createMcpHandler(() => createMemoryServer(memory), { route: url.pathname })(request, env, ctx);

@@ -110,9 +110,19 @@ const page = await get("", "text/html,application/xhtml+xml");
 assert.equal(page.status, 200);
 assert.match(page.type, /^text\/html/);
 assert.match(page.body, /claude mcp add --transport http memory/);
+assert.match(page.body, /pi mcp add memory --url/);
+assert.match(page.body, /pi mcp remove memory/);
 const landing = await fetch(`${base}/`);
 assert.match(await landing.text(), /Create a memory/);
 assert.equal((await fetch(`${base}/m/not-an-id`)).status, 404);
 console.log("ok memory page, landing page, 404 for a bad id");
+
+const destroy = () => fetch(`${url}/destroy`, { method: "POST" });
+assert.equal((await fetch(`${url}/destroy`)).status, 405);
+assert.equal((await destroy()).status, 204);
+assert.deepEqual(JSON.parse((await get("/wake.json")).body), { items: [], total: 0 });
+// Reading the view started a new, empty memory at the URL; destroy it too so the run leaves nothing stored.
+assert.equal((await destroy()).status, 204);
+console.log("ok destroy empties the memory and refuses GET");
 
 console.log("smoke passed");

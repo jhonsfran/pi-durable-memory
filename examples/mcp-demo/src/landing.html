@@ -6,22 +6,42 @@
 <link rel="icon" href="data:,">
 <title>Memory over MCP</title>
 <style>
-	:root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #1c1917; --accent-fg: #fafaf9; color-scheme: light dark; }
-	@media (prefers-color-scheme: dark) {
-		:root { --bg: #0c0a09; --fg: #e7e5e4; --muted: #a8a29e; --line: #292524; --accent: #e7e5e4; --accent-fg: #0c0a09; }
+	:root {
+		--bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --well: #f5f5f4; --accent: #2563eb;
+		--mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+		color-scheme: light dark;
 	}
-	body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, sans-serif; }
-	main { max-width: 40rem; margin: 0 auto; padding: 4rem 1rem; }
-	h1 { font: 600 1.25rem/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 1rem; }
-	p { color: var(--muted); margin: 0 0 2rem; }
-	button { font: 500 0.95rem system-ui, sans-serif; padding: 0.6rem 1rem; border: 0; border-radius: 6px; background: var(--accent); color: var(--accent-fg); cursor: pointer; }
+	@media (prefers-color-scheme: dark) {
+		:root { --bg: #0c0a09; --fg: #e7e5e4; --muted: #a8a29e; --line: #292524; --well: #1c1917; --accent: #60a5fa; }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		*, *::before, *::after { transition-duration: 0ms !important; }
+	}
+	body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+	main { max-width: 36rem; margin: 0 auto; padding: 5rem 1rem; }
+	h1 { margin: 0 0 1rem; font: 600 1.25rem/1.3 var(--mono); }
+	p { margin: 0 0 1.5rem; color: var(--muted); text-wrap: pretty; }
+	.steps { display: grid; gap: 0.75rem; margin: 0 0 2rem; padding: 0; list-style: none; counter-reset: step; }
+	.steps li { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr); gap: 0.75rem; align-items: baseline; counter-increment: step; }
+	.steps li::before { content: counter(step); display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 999px; background: var(--well); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font: 600 0.72rem var(--mono); }
+	button { display: inline-flex; align-items: center; height: 2.5rem; padding: 0 1.1rem; border: 0; border-radius: 8px; background: var(--fg); color: var(--bg); font: 500 0.95rem system-ui, sans-serif; cursor: pointer; transition-property: scale, opacity; transition-duration: 150ms; transition-timing-function: ease-out; }
+	button:hover { opacity: 0.9; }
+	button:active { scale: 0.96; }
+	button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+	.hint { margin: 1rem 0 0; font-size: 0.85rem; }
 </style>
 </head>
 <body>
 <main>
 	<h1>memory over MCP</h1>
-	<p>Create a long-term memory and connect Claude Code or Codex to it over MCP. Your agent saves one-line notes, writes the summaries that fold old notes together, and reads the whole history back at the start of every session. The memory lives at a link nobody can guess. Anyone who has the link can read and write it.</p>
+	<p>A long-term memory for Claude Code, Codex, or Pi. Your agent saves one-line notes and writes the summaries that fold old notes together. At the start of every session, it reads the whole history back.</p>
+	<ol class="steps" role="list">
+		<li>Create a memory. It lives at a link nobody can guess.</li>
+		<li>Connect your agent with the command on the memory's page.</li>
+		<li>Destroy the memory from its page when you finish testing.</li>
+	</ol>
 	<button id="create" type="button">Create a memory</button>
+	<p class="hint">Anyone who has the link can read and write the memory.</p>
 </main>
 <script>
 	document.getElementById("create").addEventListener("click", () => {
