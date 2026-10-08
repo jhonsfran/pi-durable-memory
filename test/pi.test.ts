@@ -1,7 +1,8 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
+import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { Harness, MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
 import type { Conversation } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
@@ -19,7 +20,9 @@ const INSTRUCTIONS =
 	"Remember with memory_note: durable preferences, decisions, facts likely useful in future sessions, outcomes, lessons. " +
 	"Do not remember greetings, transient execution details, routine tool output, or anything already remembered. " +
 	"One line per memory, under 280 bytes. " +
-	"A #a-b line summarizes memories a through b: use memory_recall for exact old facts and memory_zoom on a #a-b line to open it.";
+	"A #a-b line summarizes memories a through b: use memory_recall for exact old facts and memory_zoom on a #a-b line to open it. " +
+	"Zoom whenever a line only mentions something you need, before you act, guess or ask. " +
+	"Notes you save appear here from the next message on.";
 
 /** One SQLite database shared by every scope, with one `Memory` instance per scope so tool calls and assertions see the same log. */
 function scopedMemories() {
@@ -59,7 +62,7 @@ async function openHarness(options: Partial<PiMemoryExtensionOptions> = {}) {
 }
 
 /** Submit one input and run the faux script to its end. */
-async function run(root: Conversation, faux: ReturnType<typeof fauxProvider>, responses: AssistantMessage[], input = "go") {
+async function run(root: Conversation, faux: ReturnType<typeof fauxProvider>, responses: FauxResponseStep[], input = "go") {
 	faux.setResponses(responses);
 	await (await root.submit({ type: "input", content: input }, context)).wait(context);
 }
@@ -73,6 +76,13 @@ async function toolResults(root: Conversation): Promise<{ text: string; isError:
 			? [{ text: message.content.map((part) => (part.type === "text" ? part.text : "<image>")).join(""), isError: message.isError }]
 			: [],
 	);
+}
+
+/** The memory section a request carried: system messages set sections in order, so the last one that names it wins. */
+function sectionIn(messages: readonly Message[]): string | null | undefined {
+	let shown: string | null | undefined;
+	for (const message of messages) if (message.role === "system" && message.sections !== undefined && "memory" in message.sections) shown = message.sections.memory;
+	return shown;
 }
 
 async function memorySection(root: Conversation): Promise<string | null | undefined> {
@@ -91,6 +101,27 @@ describe("pi extension", () => {
 		expect(await memorySection(root)).toBe(
 			`<memory>\n${INSTRUCTIONS}\n\n[agent:a]\n#0 User prefers concise answers.\n#1 Project builds with pnpm.\n\n[project:x]\n(no memories yet)\n</memory>`,
 		);
+		await harness.close(context);
+	});
+
+	it("keeps the memory section unchanged across the tool steps of one run and refreshes it on the next run", async () => {
+		const { faux, root, harness } = await openHarness();
+		const seen: (string | null | undefined)[] = [];
+		const answer =
+			(message: AssistantMessage): FauxResponseStep =>
+			(request) => {
+				seen.push(sectionIn(request.messages));
+				return message;
+			};
+		await run(root, faux, [
+			answer(toolCall("memory_note", { content: "User prefers concise answers." })),
+			answer(toolCall("memory_recall", { query: "concise" })),
+			answer(fauxAssistantMessage("Noted.")),
+		]);
+		await run(root, faux, [answer(fauxAssistantMessage("Hello again."))], "hi");
+		const empty = `<memory>\n${INSTRUCTIONS}\n\n[agent:a]\n(no memories yet)\n\n[project:x]\n(no memories yet)\n</memory>`;
+		const noted = `<memory>\n${INSTRUCTIONS}\n\n[agent:a]\n#0 User prefers concise answers.\n\n[project:x]\n(no memories yet)\n</memory>`;
+		expect(seen).toEqual([empty, empty, empty, noted]);
 		await harness.close(context);
 	});
 
