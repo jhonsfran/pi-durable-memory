@@ -8,9 +8,9 @@ The memory model is [OptMem](https://github.com/VictorTaelin/OptMem) by Victor T
 
 ## How it works, in two minutes
 
-[![The explainer video: the log, the binary tree, the view that merges in batches, zoom, and what goes wrong at scale](docs/explainer.png)](docs/explainer.mp4)
+https://github.com/user-attachments/assets/3854d0ab-8864-431e-9a1f-5f7b0322a751
 
-[Watch the video](docs/explainer.mp4) (2:21, with narration). It covers the log, the binary tree and its free merges, and the view. The view grows at its end, and past 16 KB it merges in one batch down to 8 KB, so the prompt cache keeps it. The video ends with zoom back to the exact memory and the two things that go wrong at scale.
+The video (2:21, with narration) covers the log, the binary tree and its free merges, and the view. The view grows at its end, and past 16 KB it merges in one batch down to 8 KB, so the prompt cache keeps it. The video ends with zoom back to the exact memory and the two things that go wrong at scale.
 
 ## Set it up
 
