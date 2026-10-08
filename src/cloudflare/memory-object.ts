@@ -8,8 +8,8 @@ import { durableObjectSql } from "./sql.js";
 export interface MemoryObjectOptions<Env> {
 	/**
 	 * Writes summaries from the alarm scheduled after every write. Without one, no alarm is
-	 * scheduled and clients summarize through `nextMerge()` and `commitMerge()`, which the MCP
-	 * server exposes.
+	 * scheduled and clients summarize through `nextMerge()` and `commitMerge()`, as the MCP tools
+	 * in `examples/mcp-demo` do.
 	 */
 	readonly summarizer?: ((env: Env) => MemorySummarizer) | undefined;
 	readonly limits?: Partial<MemoryLimits> | undefined;
