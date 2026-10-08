@@ -119,7 +119,8 @@ export interface Memory {
 	 * summary, never a placeholder. Between two calls it only gains memories at its end and merges
 	 * pairs of lines into their parent. It stays within `viewBytes` once compaction has built the
 	 * parents it needs, and shows every memory before that. Superseded memories and empty summaries
-	 * are left out.
+	 * are left out. When memories lie past the stored view, as in a log written before the view
+	 * existed, `wake()` folds them in first.
 	 */
 	wake(): Promise<MemoryContext>;
 	/** Memories whose text contains every word of the query, newest first; with `match: "any"`, memories containing at least one word, best match first. Superseded memories are excluded. */

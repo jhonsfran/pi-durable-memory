@@ -82,12 +82,13 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 	}
 
 	/** What `wake()` shows: the stored view, then one memory per id no fold has reached yet. */
-	async function viewItems(total: number): Promise<MemoryItem[]> {
-		const stored = await store.readView();
+	async function viewItems(stored: readonly MemoryRange[], total: number): Promise<MemoryItem[]> {
 		const end = endOf(stored);
 		const parts = [...stored, ...Array.from({ length: Math.max(0, total - end) }, (_, i) => blockAt(0, end + i))];
 		return (await read(parts)).filter(shown);
 	}
+
+	const currentView = async (): Promise<MemoryItem[]> => viewItems(await store.readView(), await store.count());
 
 	/** The request for `job`, with the lines of `view` that start inside or before it as context. */
 	function requestFor(view: readonly MemoryItem[], job: Job): SummaryRequest {
@@ -213,7 +214,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 	 */
 	async function round(limit: number, models: boolean, skip: Set<string>, failed: Failure[]): Promise<number> {
 		const jobs = await readyJobs(limit, models, skip);
-		const view = jobs.some((job) => job.summary === undefined) ? await viewItems(await store.count()) : [];
+		const view = jobs.some((job) => job.summary === undefined) ? await currentView() : [];
 		const outcomes = await Promise.all(
 			jobs.map(async (job) => {
 				try {
@@ -256,8 +257,13 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		},
 
 		async wake() {
-			const total = await store.count();
-			return { items: await viewItems(total), total };
+			let [stored, total] = await Promise.all([store.readView(), store.count()]);
+			// A log written before the view existed has no stored view yet: fold it once rather than show every memory.
+			if (endOf(stored) < total) {
+				await fold();
+				[stored, total] = await Promise.all([store.readView(), store.count()]);
+			}
+			return { items: await viewItems(stored, total), total };
 		},
 
 		async recall(query, options) {
@@ -299,7 +305,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 			}
 			if (free > 0) await fold();
 			const [job] = await readyJobs(1, true, new Set());
-			return job === undefined ? undefined : { startId: job.startId, endId: job.endId, request: requestFor(await viewItems(await store.count()), job) };
+			return job === undefined ? undefined : { startId: job.startId, endId: job.endId, request: requestFor(await currentView(), job) };
 		},
 
 		async commitMerge(range, summary) {

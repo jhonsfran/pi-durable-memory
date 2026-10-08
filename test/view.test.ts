@@ -108,6 +108,19 @@ describe("view", () => {
 		expect(folded).toBeLessThan(5_000);
 	});
 
+	it("folds on wake a log written before the view existed, so an upgraded scope never shows every memory", async () => {
+		const scope = "upgraded";
+		const { db, memory, store } = await openFixture({ scope, summarizer: refusingSummarizer, limits: { viewBytes: 256 } });
+		await seedMemoriesBySql(db, scope, 1000);
+		await seedNodesBySql(db, scope, 1000, (level, startId) => `level ${level} from ${startId}`);
+		const view = await memory.wake();
+		expect(view.total).toBe(1000);
+		expect(bytes(view)).toBeLessThanOrEqual(256);
+		expect(gaps(view.items.map(rangeOf), 1000)).toEqual([]);
+		expect(view.items[0]).toEqual({ type: "summary", startId: 0, endId: 255, content: "level 8 from 0" });
+		expect((await store.readView()).length).toBe(view.items.length);
+	});
+
 	it("zooms from the first line down to a memory and refuses a block that is not built", async () => {
 		const { memory } = await openFixture({ summarizer: spanSummarizer, limits: { summaryBytes: 16, viewBytes: 64 } });
 		await noteMany(memory, 1000);
