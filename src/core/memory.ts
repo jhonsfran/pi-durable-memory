@@ -8,7 +8,7 @@ import type { FoldSource, Part } from "./view.js";
 
 const DEFAULT_LIMITS: MemoryLimits = { maxEntryBytes: 280, summaryBytes: 512, viewBytes: 16_384 };
 const DEFAULT_RECALL_LIMIT = 10;
-const JOBS = 8;
+const MAX_CONCURRENT_SUMMARIES = 8;
 
 interface Job extends MemoryRange {
 	readonly level: number;
@@ -33,7 +33,7 @@ const shown = (item: MemoryItem | undefined): item is MemoryItem => item !== und
 
 const startOf = (item: MemoryItem): number => (item.type === "memory" ? item.id : item.startId);
 
-const endOf = (view: readonly MemoryRange[]): number => (view.at(-1)?.endId ?? -1) + 1;
+const firstUncovered = (view: readonly MemoryRange[]): number => (view.at(-1)?.endId ?? -1) + 1;
 
 function assertBlock(range: MemoryRange): void {
 	if (!isAlignedBlock(range) || blockSize(range) < 2) {
@@ -77,7 +77,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 	}
 
 	async function viewItems(stored: readonly MemoryRange[], total: number): Promise<MemoryItem[]> {
-		const end = endOf(stored);
+		const end = firstUncovered(stored);
 		const parts = [...stored, ...Array.from({ length: Math.max(0, total - end) }, (_, i) => blockAt(0, end + i))];
 		return (await read(parts)).filter(shown);
 	}
@@ -109,7 +109,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 	async function foldOnce(): Promise<void> {
 		const total = await store.count();
 		const stored = await store.readView();
-		const end = endOf(stored);
+		const end = firstUncovered(stored);
 		const levels = Array.from({ length: total < 2 ? 1 : Math.floor(Math.log2(total)) + 1 }, (_, level) => level);
 		let source: FoldSource;
 		if (stored.length === 0 && total > 0) {
@@ -233,7 +233,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 
 		async wake() {
 			let [stored, total] = await Promise.all([store.readView(), store.count()]);
-			if (endOf(stored) < total) {
+			if (firstUncovered(stored) < total) {
 				await fold();
 				[stored, total] = await Promise.all([store.readView(), store.count()]);
 			}
@@ -258,7 +258,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 			const failed: Failure[] = [];
 			let merged = 0;
 			for (;;) {
-				const stored = await round(Math.min(JOBS, maxMerges - merged), summarizer !== undefined, skip, failed);
+				const stored = await round(Math.min(MAX_CONCURRENT_SUMMARIES, maxMerges - merged), summarizer !== undefined, skip, failed);
 				merged += stored;
 				await fold();
 				if (stored === 0 || merged >= maxMerges) break;
@@ -273,7 +273,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		async nextMerge() {
 			let free = 0;
 			for (;;) {
-				const stored = await round(JOBS, false, new Set(), []);
+				const stored = await round(MAX_CONCURRENT_SUMMARIES, false, new Set(), []);
 				if (stored === 0) break;
 				free += stored;
 			}

@@ -18,9 +18,13 @@ export const SUMMARY_SYSTEM = [
 const SCALE =
 	"User wants answers short and in English, code before prose, and no push to main without a review; deploys go through CI and need Ana's approval, never on Fridays; billing is usage-based on Stripe, but Acme pays by invoice because its procurement cannot use cards; the Postgres move to Neon failed on a missing pg_cron extension and was rolled back, retry once the vendor answers; tests run inside workerd with pnpm check on Node 22; Seb owns billing and the invoice job, Ana owns the dashboard and its charts; model spend is capped at 500 USD a month and was half used by the 12th; staging lives in eu-west and holds a copy of production from June 3; decided one memory object per scope and the cheapest summarizer that stays under the size limit; open: whether trial users keep their data after 30 days, and who answers support on weekends.";
 
-const TRIES = 5;
+const MAX_REPLIES = 5;
 
-const scaleLine = (limit: number): string => (SCALE.length <= limit ? SCALE : SCALE.slice(0, Math.max(0, SCALE.lastIndexOf(" ", limit))));
+const scaleLine = (maxBytes: number): string => {
+	if (byteLength(SCALE) <= maxBytes) return SCALE;
+	const cut = truncateUtf8(SCALE, maxBytes + 1);
+	return cut.slice(0, Math.max(0, cut.lastIndexOf(" ")));
+};
 
 export function summaryRequest(context: readonly string[], children: readonly [string, string], limit: number): SummaryRequest {
 	const scale = scaleLine(limit);
@@ -28,7 +32,7 @@ export function summaryRequest(context: readonly string[], children: readonly [s
 	return { system: SUMMARY_SYSTEM, turns: [{ role: "user", blocks: [`<memory>\n${context.join("\n")}\n</memory>`, step] }] };
 }
 
-export async function summarize(summarizer: MemorySummarizer, request: SummaryRequest, limit: number): Promise<string> {
+export async function summarize(summarizer: MemorySummarizer, request: SummaryRequest, targetBytes: number): Promise<string> {
 	const turns: SummaryTurn[] = [...request.turns];
 	let shortest = "";
 	for (let tries = 1; ; tries++) {
@@ -36,10 +40,10 @@ export async function summarize(summarizer: MemorySummarizer, request: SummaryRe
 		if (line.length === 0) throw new Error("The summarizer replied with an empty line");
 		const bytes = byteLength(line);
 		if (tries === 1 || bytes < byteLength(shortest)) shortest = line;
-		if (bytes <= limit || tries === TRIES) return shortest;
+		if (bytes <= targetBytes || tries === MAX_REPLIES) return shortest;
 		turns.push(
 			{ role: "assistant", text: line },
-			{ role: "user", blocks: [`That line is ${bytes} bytes; the limit is ${limit}. It must end where it is cut here:\n${truncateUtf8(line, limit)}| ← LIMIT`] },
+			{ role: "user", blocks: [`That line is ${bytes} bytes; the limit is ${targetBytes}. It must end where it is cut here:\n${truncateUtf8(line, targetBytes)}| ← LIMIT`] },
 		);
 	}
 }

@@ -12,25 +12,27 @@ export interface FoldSource {
 	bytes(range: MemoryRange): Promise<number>;
 }
 
+const due = (total: number, startId: number, level: number): number => (total - startId) / 2 ** (level + 2);
+
 export async function foldView(parts: Part[], from: number, total: number, budget: number, source: FoldSource): Promise<void> {
 	let size = parts.reduce((sum, part) => sum + part.bytes, 0);
 	const width = Array.from({ length: source.levelLengths.length + 2 }, (_, level) => 2 ** level);
 	const builtEnd = width.map((blockWidth, level) => (source.levelLengths[level] ?? 0) * blockWidth);
-	const settled = new Uint8Array(width.length);
+	const oldestPairFound = new Uint8Array(width.length);
 
 	async function shrink(t: number): Promise<void> {
 		while (size > budget) {
 			let best: { index: number; due: number; bytes: number } | undefined;
-			settled.fill(0);
+			oldestPairFound.fill(0);
 			for (let index = 0; index + 1 < parts.length; index++) {
 				const a = parts[index];
 				const b = parts[index + 1];
-				if (a === undefined || b === undefined || a.level !== b.level || settled[a.level] === 1) continue;
+				if (a === undefined || b === undefined || a.level !== b.level || oldestPairFound[a.level] === 1) continue;
 				const parentWidth = width[a.level + 1] ?? Number.POSITIVE_INFINITY;
 				if (a.startId % parentWidth !== 0 || a.startId >= (builtEnd[a.level + 1] ?? 0)) continue;
-				settled[a.level] = 1;
-				const due = (t - a.startId) / (2 * parentWidth);
-				if (best === undefined || due > best.due) best = { index, due, bytes: a.bytes + b.bytes };
+				oldestPairFound[a.level] = 1;
+				const pairDue = due(t, a.startId, a.level);
+				if (best === undefined || pairDue > best.due) best = { index, due: pairDue, bytes: a.bytes + b.bytes };
 			}
 			if (best === undefined) return;
 			const first = parts[best.index];

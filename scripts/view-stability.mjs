@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [repo, notesArg = "2000", viewArg = "24000"] = process.argv.slice(2);
+if (repo === undefined) {
+	console.error("usage: node scripts/view-stability.mjs <repo-dir> [notes=2000] [viewBytes=24000]");
+	process.exit(2);
+}
 const N = Number(notesArg);
 const VIEW = Number(viewArg);
 const load = (path) => import(pathToFileURL(join(repo, "dist", path)).href);

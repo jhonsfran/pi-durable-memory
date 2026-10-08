@@ -37,7 +37,7 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 
 	return class MemoryObject extends DurableObject<Env> implements Memory {
 		private memory: Promise<Memory> | undefined;
-		private readonly reported = new Set<string>();
+		private readonly loggedFailures = new Set<string>();
 
 		private open(): Promise<Memory> {
 			this.memory ??= createSqliteMemoryStore(durableObjectSql(this.ctx.storage), { scope: SCOPE }).then(
@@ -70,8 +70,8 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 			const memory = await this.open();
 			const { failed } = await memory.compact({ maxMerges: mergesPerAlarm });
 			for (const failure of failed) {
-				if (this.reported.has(label(failure))) continue;
-				this.reported.add(label(failure));
+				if (this.loggedFailures.has(label(failure))) continue;
+				this.loggedFailures.add(label(failure));
 				console.error(`Summarizing ${label(failure)} failed, retrying every ${RETRY_MS / 1000} s: ${failure.message}`);
 			}
 			if (failed.length > 0) await this.ctx.storage.setAlarm(Date.now() + RETRY_MS);
