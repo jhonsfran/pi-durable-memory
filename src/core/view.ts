@@ -18,14 +18,16 @@ const due = (total: number, startId: number, level: number): number => {
 	return (total - last) / 2 ** level;
 };
 
-export async function foldView(parts: Part[], from: number, total: number, budget: number, source: FoldSource): Promise<void> {
+/** Merges in batches, from over `high` down to `low`, instead of one pair per memory: between batches each view is a prefix of the next, so the prompt cache keeps it. */
+export async function foldView(parts: Part[], from: number, total: number, marks: { readonly high: number; readonly low: number }, source: FoldSource): Promise<void> {
 	let size = parts.reduce((sum, part) => sum + part.bytes, 0);
 	const width = Array.from({ length: source.levelLengths.length + 2 }, (_, level) => 2 ** level);
 	const builtEnd = width.map((blockWidth, level) => (source.levelLengths[level] ?? 0) * blockWidth);
 	const oldestPairFound = new Uint8Array(width.length);
 
-	async function shrink(t: number): Promise<void> {
-		while (size > budget) {
+	async function batch(t: number): Promise<void> {
+		if (size <= marks.high) return;
+		while (size > marks.low) {
 			let best: { index: number; due: number; bytes: number } | undefined;
 			oldestPairFound.fill(0);
 			for (let index = 0; index + 1 < parts.length; index++) {
@@ -51,7 +53,7 @@ export async function foldView(parts: Part[], from: number, total: number, budge
 		const bytes = await source.bytes({ startId: id, endId: id });
 		parts.push({ level: 0, startId: id, bytes });
 		size += bytes;
-		await shrink(id + 1);
+		await batch(id + 1);
 	}
-	if (from >= total) await shrink(total);
+	if (from >= total) await batch(total);
 }

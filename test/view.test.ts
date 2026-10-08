@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { InvalidRange } from "../src/index.js";
+import { InvalidRange, formatMemoryContext } from "../src/index.js";
 import type { MemoryContext, MemoryItem, MemoryRange } from "../src/index.js";
 import { foldView } from "../src/core/view.js";
 import type { Part } from "../src/core/view.js";
@@ -50,7 +50,7 @@ describe("view", () => {
 		for (let id = 0; id < 4096; id++) {
 			list = push(id, list);
 			const expected = pushLines(list, id + 1);
-			await foldView(parts, id, id + 1, expected.length, source);
+			await foldView(parts, id, id + 1, { high: expected.length, low: expected.length }, source);
 			const got = parts.map((part) => `${part.startId}+${2 ** part.level}`);
 			if (got.join() !== expected.join()) differing.push(`T=${id + 1}: push ${expected.join(", ")}, fold ${got.join(", ")}`);
 		}
@@ -69,16 +69,23 @@ describe("view", () => {
 		expect(view.items.at(-1)).toEqual({ type: "summary", startId: 992, endId: 999, content: "m992..m999" });
 	});
 
-	it("only appends memories and merges lines from one wake to the next, and every line is real text", async () => {
-		const { memory } = await openFixture({ summarizer: spanSummarizer, limits: { summaryBytes: 16, viewBytes: 128 } });
+	it("between two wakes only grows at its end or merges in one batch to half of viewBytes, never splits, and shows real text", async () => {
+		const { memory } = await openFixture({ summarizer: spanSummarizer, limits: { summaryBytes: 16, viewBytes: 256 } });
 		const broken: string[] = [];
+		const batches: number[] = [];
 		let previous: MemoryRange[] = [];
-		for (let id = 0; id < 300; id++) {
+		let previousText: string | undefined;
+		for (let id = 0; id < 400; id++) {
 			await memory.note({ content: `m${id}`, createdAt: id });
 			await memory.compact();
 			const view = await memory.wake();
 			const parts = view.items.map(rangeOf);
-			if (bytes(view) > 128) broken.push(`after m${id}: ${bytes(view)} bytes`);
+			const text = formatMemoryContext(view);
+			if (previousText !== undefined && !text.startsWith(`${previousText}\n`)) {
+				batches.push(id);
+				if (bytes(view) > 128) broken.push(`after m${id}: a batch left ${bytes(view)} bytes`);
+			}
+			if (bytes(view) > 256) broken.push(`after m${id}: ${bytes(view)} bytes`);
 			broken.push(...gaps(parts, id + 1).map((gap) => `after m${id}: ${gap}`));
 			for (const part of previous) {
 				if (!parts.some((next) => next.startId <= part.startId && part.endId <= next.endId)) broken.push(`after m${id}: #${part.startId}-${part.endId} was split`);
@@ -88,11 +95,13 @@ describe("view", () => {
 				if (ends(item).join() !== `m${range.startId},m${range.endId}`) broken.push(`after m${id}: #${range.startId}-${range.endId} shows "${item.content}"`);
 			}
 			previous = parts;
+			previousText = text;
 		}
 		expect(broken).toEqual([]);
+		expect(batches).toEqual([88, 124, 157, 191, 225, 259, 292, 327, 362, 396]);
 		expect((await memory.wake()).items.map((item) => item.content)).toEqual([
-			"m0..m127", "m128..m191", "m192..m223", "m224..m239", "m240..m255", "m256..m271", "m272..m279", "m280..m287",
-			"m288..m291", "m292 / m293", "m294 / m295", "m296", "m297", "m298", "m299",
+			"m0..m127", "m128..m191", "m192..m255", "m256..m319", "m320..m351", "m352..m367", "m368..m375", "m376..m383",
+			"m384..m387", "m388..m391", "m392 / m393", "m394", "m395", "m396", "m397", "m398", "m399",
 		]);
 	});
 
@@ -135,7 +144,7 @@ describe("view", () => {
 		expect(view.total).toBe(100_000);
 		expect(bytes(view)).toBeLessThanOrEqual(16_384);
 		expect(gaps(view.items.map(rangeOf), 100_000)).toEqual([]);
-		expect(view.items[0]).toEqual({ type: "summary", startId: 0, endId: 1023, content: "level 10 from 0" });
+		expect(view.items[0]).toEqual({ type: "summary", startId: 0, endId: 2047, content: "level 11 from 0" });
 		expect(view.items.at(-1)).toEqual({ type: "memory", id: 99_999, createdAt: 99_999, content: "m99999" });
 		expect(folded).toBeLessThan(5_000);
 	});
@@ -149,7 +158,7 @@ describe("view", () => {
 		expect(view.total).toBe(1000);
 		expect(bytes(view)).toBeLessThanOrEqual(256);
 		expect(gaps(view.items.map(rangeOf), 1000)).toEqual([]);
-		expect(view.items[0]).toEqual({ type: "summary", startId: 0, endId: 255, content: "level 8 from 0" });
+		expect(view.items[0]).toEqual({ type: "summary", startId: 0, endId: 511, content: "level 9 from 0" });
 		expect((await store.readView()).length).toBe(view.items.length);
 	});
 

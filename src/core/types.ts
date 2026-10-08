@@ -87,7 +87,7 @@ export interface MemoryLimits {
 	readonly maxEntryBytes: number;
 	/** Target size of a summary, in UTF-8 bytes. Two children that fit in it together are joined without a model. The model is asked for at most this much, and `commitMerge()` refuses more. Default 512. */
 	readonly summaryBytes: number;
-	/** Budget of `wake()`: the UTF-8 bytes of its items' text. The view merges old lines while it is over, once their parents are built. Default 16,384. */
+	/** High mark of `wake()`, in UTF-8 bytes of its items' text. When the view passes it, one batch merges old lines into their built parents until the view is at most half of it. Default 16,384. */
 	readonly viewBytes: number;
 }
 
@@ -116,11 +116,12 @@ export interface Memory {
 	note(input: NoteInput): Promise<MemoryEntry>;
 	/**
 	 * The view: aligned blocks that tile the whole log, oldest first, each a memory or a built
-	 * summary, never a placeholder. Between two calls it only gains memories at its end and merges
-	 * pairs of lines into their parent. It stays within `viewBytes` once compaction has built the
-	 * parents it needs, and shows every memory before that. Superseded memories and empty summaries
-	 * are left out. When memories lie past the stored view, as in a log written before the view
-	 * existed, `wake()` folds them in first.
+	 * summary, never a placeholder. Between two calls it only gains memories at its end, unless it
+	 * passed `viewBytes`: then one batch merged its most due pairs of lines into their parents until
+	 * it was at most half of `viewBytes` or no pair had a built parent. It stays within `viewBytes`
+	 * once compaction has built the parents it needs, and shows every memory before that. Superseded
+	 * memories and empty summaries are left out. When memories lie past the stored view, as in a log
+	 * written before the view existed, `wake()` folds them in first.
 	 */
 	wake(): Promise<MemoryContext>;
 	/** Memories whose text contains every word of the query, newest first; with `match: "any"`, memories containing at least one word, best match first. Superseded memories are excluded. */

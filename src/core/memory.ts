@@ -129,7 +129,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 			const item = items[index];
 			return { level: blockLevel(range), startId: range.startId, bytes: item === undefined ? 0 : byteLength(item.content) };
 		});
-		await foldView(parts, end, total, viewBytes, source);
+		await foldView(parts, end, total, { high: viewBytes, low: viewBytes / 2 }, source);
 		const before = new Map(stored.map((range) => [range.startId, blockLevel(range)]));
 		const after = new Set(parts.map((part) => part.startId));
 		const put = parts.filter((part) => before.get(part.startId) !== part.level).map((part) => blockAt(part.level, part.startId));
