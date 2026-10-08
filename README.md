@@ -233,7 +233,7 @@ A cheaper design asks the model to delete the fact from each ancestor's text, in
 
 The demo has no login. Each memory lives at a URL with an unguessable id, and anyone who has the URL can read and write the memory. Each client IP gets 300 memory requests a minute.
 
-A hosted copy runs at https://mcp-demo.jhonsfran.workers.dev.
+A hosted copy runs at https://pi-durable-memory.jhonsfran.workers.dev.
 
 To connect an agent:
 

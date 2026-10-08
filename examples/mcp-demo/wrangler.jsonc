@@ -1,5 +1,5 @@
 {
-	"name": "mcp-demo",
+	"name": "pi-durable-memory",
 	"main": "src/index.ts",
 	// The newest date the workerd bundled with wrangler 4.124.0 accepts.
 	"compatibility_date": "2026-08-15",
