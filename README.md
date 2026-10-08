@@ -6,9 +6,9 @@ Pi Durable's compaction manages the context of one conversation. This package ma
 
 ## Two minutes on how it works
 
-https://github.com/user-attachments/assets/6fedb891-051a-40ad-9e11-4ffd24281370
+[![The explainer video: the log, the binary tree, the view that only appends and merges, zoom, and what goes wrong at scale](docs/explainer.png)](docs/explainer.mp4)
 
-The log, the summary tree, the bounded wake that goes into the system prompt, zoom back to the exact memory, and the two things that go wrong at scale. 2:08, with narration. The file is also in the repo at [docs/explainer.mp4](docs/explainer.mp4).
+[Watch the video](docs/explainer.mp4) (2:20, with narration). The log, the binary tree and its free merges, the view that only appends and merges so the prompt cache keeps it, zoom back to the exact memory, and the two things that go wrong at scale.
 
 ## Setup
 
