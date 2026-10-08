@@ -6,5 +6,8 @@
 	// agents/mcp/server imports node:async_hooks.
 	"compatibility_flags": ["nodejs_compat"],
 	"durable_objects": { "bindings": [{ "name": "MEMORY", "class_name": "MemoryObject" }] },
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MemoryObject"] }]
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MemoryObject"] }],
+	// The demo has no login, so each client IP gets 300 memory requests a minute. Limiters that share
+	// a namespace_id in one account share counters, so keep this number unique in the account.
+	"ratelimits": [{ "name": "RATE_LIMITER", "namespace_id": "7301", "simple": { "limit": 300, "period": 60 } }]
 }
