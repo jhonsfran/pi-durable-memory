@@ -25,16 +25,16 @@ function gaps(parts: readonly MemoryRange[], total: number): string[] {
 }
 
 describe("view", () => {
-	it("wakes within viewBytes once the parents exist, tiling the log and ending on the newest memory", async () => {
+	it("wakes within viewBytes once compaction has built the parents, tiling the whole log", async () => {
 		const { memory } = await openFixture({ summarizer: spanSummarizer, limits: { summaryBytes: 16, viewBytes: 256 } });
 		await noteMany(memory, 1000);
-		expect(await memory.compact()).toEqual({ merged: 994, pending: 0 });
+		expect(await memory.compact()).toEqual({ merged: 994, pending: 0, failed: [] });
 		const view = await memory.wake();
 		expect(view.total).toBe(1000);
 		expect(bytes(view)).toBeLessThanOrEqual(256);
 		expect(gaps(view.items.map(rangeOf), 1000)).toEqual([]);
-		expect(view.items[0]).toEqual({ type: "summary", startId: 0, endId: 255, content: "m0..m255" });
-		expect(view.items.at(-1)).toEqual({ type: "memory", id: 999, createdAt: 1_700_000_000_999, content: "m999" });
+		expect(view.items[0]).toEqual({ type: "summary", startId: 0, endId: 63, content: "m0..m63" });
+		expect(view.items.at(-1)).toEqual({ type: "summary", startId: 992, endId: 999, content: "m992..m999" });
 	});
 
 	it("only appends memories and merges lines from one wake to the next, and every line is real text", async () => {
@@ -78,7 +78,7 @@ describe("view", () => {
 		await memory.note({ content: "bbbb", createdAt: 1 });
 		await memory.note({ content: "cc", supersedes: 0, createdAt: 2 });
 		await memory.note({ content: "dd", supersedes: 1, createdAt: 3 });
-		expect(await memory.compact()).toEqual({ merged: 1, pending: 2 });
+		expect(await memory.compact()).toEqual({ merged: 1, pending: 2, failed: [] });
 		expect(await store.readView()).toEqual([
 			{ startId: 0, endId: 1 },
 			{ startId: 2, endId: 2 },
@@ -96,7 +96,7 @@ describe("view", () => {
 		await seedMemoriesBySql(db, scope, 100_000);
 		await seedNodesBySql(db, scope, 100_000, (level, startId) => `level ${level} from ${startId}`);
 		const started = performance.now();
-		expect(await memory.compact()).toEqual({ merged: 0, pending: 0 });
+		expect(await memory.compact()).toEqual({ merged: 0, pending: 0, failed: [] });
 		const folded = performance.now() - started;
 		const view = await memory.wake();
 		console.log(`100k: fold ${Math.round(folded)}ms, ${view.items.length} lines`);

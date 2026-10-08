@@ -8,7 +8,7 @@ describe("memory", () => {
 		const { memory } = await openFixture();
 		await memory.note({ content: "Pi Durable runs agents as durable workflows", sourceId: "task-1", createdAt: 1 });
 		await memory.note({ content: "Memory lives in a Cloudflare Durable Object", sourceId: "task-2", createdAt: 2 });
-		expect(await memory.compact()).toEqual({ merged: 1, pending: 0 });
+		expect(await memory.compact()).toEqual({ merged: 1, pending: 0, failed: [] });
 		expect(await memory.wake()).toEqual({
 			total: 2,
 			items: [
@@ -50,7 +50,7 @@ describe("memory", () => {
 		};
 		const { memory, store } = await openFixture({ summarizer, limits: { summaryBytes: 21 } });
 		await noteMany(memory, 16);
-		expect(await memory.compact()).toEqual({ merged: 15, pending: 0 });
+		expect(await memory.compact()).toEqual({ merged: 15, pending: 0, failed: [] });
 		expect(merged).toEqual([
 			["m0 / m1 / m2 / m3", "m4 / m5 / m6 / m7"],
 			["m8 / m9 / m10 / m11", "m12 / m13 / m14 / m15"],
@@ -68,10 +68,10 @@ describe("memory", () => {
 		const { memory, store } = await openFixture();
 		await noteMany(memory, 8);
 		expect(await memory.pending()).toBe(7);
-		expect(await memory.compact({ maxMerges: 1 })).toEqual({ merged: 1, pending: 6 });
+		expect(await memory.compact({ maxMerges: 1 })).toEqual({ merged: 1, pending: 6, failed: [] });
 		expect(await store.getNodes([{ level: 1, startId: 0 }, { level: 1, startId: 2 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "m0 / m1" }]);
-		expect(await memory.compact({ maxMerges: 3 })).toEqual({ merged: 3, pending: 3 });
-		expect(await memory.compact()).toEqual({ merged: 3, pending: 0 });
+		expect(await memory.compact({ maxMerges: 3 })).toEqual({ merged: 3, pending: 3, failed: [] });
+		expect(await memory.compact()).toEqual({ merged: 3, pending: 0, failed: [] });
 	});
 
 	it("supersedes an older memory: hidden from wake, zoom and the summarizer, still in the store", async () => {
@@ -84,7 +84,7 @@ describe("memory", () => {
 			{ id: 0, createdAt: 1, content: "prefers brevity", supersededBy: 1 },
 			{ id: 1, createdAt: 2, content: "prefers detail", supersedes: 0 },
 		]);
-		expect(await memory.compact()).toEqual({ merged: 1, pending: 0 });
+		expect(await memory.compact()).toEqual({ merged: 1, pending: 0, failed: [] });
 		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "prefers detail" }]);
 		expect(await memory.zoom({ startId: 0, endId: 1 })).toEqual([{ type: "memory", id: 1, createdAt: 2, content: "prefers detail" }]);
 		expect(await memory.recall("prefers")).toEqual([{ id: 1, createdAt: 2, content: "prefers detail", supersedes: 0 }]);
@@ -98,7 +98,7 @@ describe("memory", () => {
 		await memory.note({ content: "prefers detail", supersedes: 0, createdAt: 2 });
 		await memory.note({ content: "prefers tables", supersedes: 1, createdAt: 3 });
 		await memory.note({ content: "prefers lists", createdAt: 4 });
-		expect(await memory.compact()).toEqual({ merged: 3, pending: 0 });
+		expect(await memory.compact()).toEqual({ merged: 3, pending: 0, failed: [] });
 		expect(await store.getNodes([{ level: 1, startId: 0 }, { level: 1, startId: 2 }, { level: 2, startId: 0 }])).toEqual([
 			{ level: 1, startId: 0, endId: 1, summary: "" },
 			{ level: 1, startId: 2, endId: 3, summary: "prefers tables / prefers lists" },
@@ -151,13 +151,13 @@ describe("memory", () => {
 		await noteMany(memory, 4);
 		await memory.note({ content: "long note", createdAt: 4 });
 		await memory.note({ content: "another", createdAt: 5 });
-		expect(await memory.compact()).toEqual({ merged: 2, pending: 2 });
+		expect(await memory.compact()).toEqual({ merged: 2, pending: 2, failed: [] });
 		const keys = [{ level: 1, startId: 0 }, { level: 1, startId: 2 }, { level: 1, startId: 4 }, { level: 2, startId: 0 }];
 		expect((await store.getNodes(keys)).map((node) => node.summary)).toEqual(["m0 / m1", "m2 / m3"]);
 		for (let input = await memory.nextMerge(); input !== undefined; input = await memory.nextMerge()) {
 			await memory.commitMerge(input, `c${input.startId}${input.endId}`);
 		}
-		expect(await memory.compact()).toEqual({ merged: 0, pending: 0 });
+		expect(await memory.compact()).toEqual({ merged: 0, pending: 0, failed: [] });
 		expect((await store.getNodes(keys)).map((node) => node.summary)).toEqual(["m0 / m1", "m2 / m3", "c45", "c03"]);
 	});
 });

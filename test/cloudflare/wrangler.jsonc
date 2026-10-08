@@ -6,11 +6,13 @@
 	"durable_objects": {
 		"bindings": [
 			{ "name": "MEMORY", "class_name": "MemoryObject" },
-			{ "name": "MEMORY_CLIENT", "class_name": "ClientSummarizedObject" }
+			{ "name": "MEMORY_CLIENT", "class_name": "ClientSummarizedObject" },
+			{ "name": "MEMORY_FLAKY", "class_name": "FlakyObject" }
 		]
 	},
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["MemoryObject"] },
-		{ "tag": "v2", "new_sqlite_classes": ["ClientSummarizedObject"] }
+		{ "tag": "v2", "new_sqlite_classes": ["ClientSummarizedObject"] },
+		{ "tag": "v3", "new_sqlite_classes": ["FlakyObject"] }
 	]
 }

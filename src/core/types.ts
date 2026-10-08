@@ -69,14 +69,17 @@ export interface RecallOptions {
 }
 
 export interface CompactOptions {
-	/** Stop after this many merges. Defaults to all pending merges. */
+	/** Store at most this many nodes. Defaults to all the tree is missing. */
 	readonly maxMerges?: number | undefined;
 }
 
 export interface CompactResult {
+	/** Nodes this call stored, free merges included. */
 	readonly merged: number;
-	/** Merges still missing after this call. */
+	/** Nodes the log could have that are not built yet. */
 	readonly pending: number;
+	/** Blocks whose summary failed in this call, each once, with the error message. Plain data, so it crosses Durable Object RPC. The next call tries them again. */
+	readonly failed: readonly { readonly startId: number; readonly endId: number; readonly message: string }[];
 }
 
 export interface MemoryLimits {
@@ -123,6 +126,11 @@ export interface Memory {
 	recall(query: string, options?: RecallOptions): Promise<MemoryEntry[]>;
 	/** The two halves of a built summary, each rendered as `wake()` renders it. Throws `InvalidRange` for any range that is not a built node. */
 	zoom(range: MemoryRange): Promise<MemoryItem[]>;
+	/**
+	 * Build what the tree is missing, in rounds of up to 8 blocks whose children are built: merges
+	 * that fit are stored without a model, the rest go to the summarizer concurrently. Folds the view
+	 * after each round. A summarizer error lands in `failed`, never in a throw.
+	 */
 	compact(options?: CompactOptions): Promise<CompactResult>;
 	/** Merges that `compact()` would perform now. */
 	pending(): Promise<number>;

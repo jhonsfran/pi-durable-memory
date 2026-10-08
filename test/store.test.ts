@@ -49,7 +49,7 @@ describe("sqlite store", () => {
 		const b = await openFixture({ db, scope: "b" });
 		await noteMany(a.memory, 4);
 		await b.memory.note({ content: "only in b", createdAt: 1 });
-		expect(await a.memory.compact()).toEqual({ merged: 3, pending: 0 });
+		expect(await a.memory.compact()).toEqual({ merged: 3, pending: 0, failed: [] });
 		expect(await b.store.count()).toBe(1);
 		expect(await b.memory.wake()).toEqual({ total: 1, items: [{ type: "memory", id: 0, createdAt: 1, content: "only in b" }] });
 		expect(await b.memory.recall("m1")).toEqual([]);

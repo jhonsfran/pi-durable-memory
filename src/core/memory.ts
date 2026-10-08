@@ -2,18 +2,23 @@ import { blockAt, blockLevel, blockSize, childrenOf, isAlignedBlock, label } fro
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong } from "./errors.js";
 import { summarize, summaryRequest } from "./summary.js";
 import { byteLength, oneLine } from "./text.js";
-import type { CreateMemoryOptions, Memory, MemoryEntry, MemoryItem, MemoryLimits, MemoryNode, MemoryRange, SummaryRequest } from "./types.js";
+import type { CompactResult, CreateMemoryOptions, Memory, MemoryEntry, MemoryItem, MemoryLimits, MemoryNode, MemoryRange, SummaryRequest } from "./types.js";
 import { foldView } from "./view.js";
 import type { FoldSource, Part } from "./view.js";
 
 const DEFAULT_LIMITS: MemoryLimits = { maxEntryBytes: 280, summaryBytes: 512, viewBytes: 16_384 };
 const DEFAULT_RECALL_LIMIT = 10;
+/** Blocks one compaction round takes, so at most this many summarizer conversations run at once (spec 4.1). */
+const JOBS = 8;
 
-/** A block whose two children do not fit one line together, so a model must merge them. */
-interface ModelBlock extends MemoryRange {
+/** A block whose children are built. `summary` is its text when no model is needed (a free merge), `undefined` when a model must merge the children. */
+interface Job extends MemoryRange {
 	readonly level: number;
 	readonly children: readonly [string, string];
+	readonly summary: string | undefined;
 }
+
+type Failure = CompactResult["failed"][number];
 
 /** A memory or summary is one line, and never empty. */
 function normalizeEntry(text: string): string {
@@ -84,10 +89,10 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		return (await read(parts)).filter(shown);
 	}
 
-	/** The request for `block`, with the lines of `view` that start inside or before it as context. */
-	function requestFor(view: readonly MemoryItem[], block: ModelBlock): SummaryRequest {
-		const context = view.filter((item) => startOf(item) <= block.endId).map((item) => item.content);
-		return summaryRequest(context, block.children, summaryBytes);
+	/** The request for `job`, with the lines of `view` that start inside or before it as context. */
+	function requestFor(view: readonly MemoryItem[], job: Job): SummaryRequest {
+		const context = view.filter((item) => startOf(item) <= job.endId).map((item) => item.content);
+		return summaryRequest(context, job.children, summaryBytes);
 	}
 
 	/** Sizes for one fold: the memories and nodes given are known, any other built node is read on first use. */
@@ -175,40 +180,62 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		return count;
 	}
 
-	/** The first block compaction would build now: levels ascending, then position. Nodes form a dense prefix per level, so `levelLength` is the cursor. */
-	async function nextPendingBlock(total: number): Promise<MemoryRange | undefined> {
-		for (let level = 1; 2 ** level <= total; level++) {
-			const size = 2 ** level;
-			const have = await store.levelLength(level);
-			if (have < Math.floor(total / size)) return blockAt(level, have * size);
+	/**
+	 * Up to `limit` blocks whose children are built, by level and then position. Nodes form a dense
+	 * prefix per level, so `levelLength` is each level's cursor. A level stops at a block in `skip`,
+	 * and at a block that needs a model when `models` is false, because `appendNode` would refuse
+	 * every block after it.
+	 */
+	async function readyJobs(limit: number, models: boolean, skip: ReadonlySet<string>): Promise<Job[]> {
+		const total = await store.count();
+		const jobs: Job[] = [];
+		let below = total;
+		for (let level = 1; 2 ** level <= total && jobs.length < limit; level++) {
+			const built = await store.levelLength(level);
+			for (let index = built; index < Math.floor(below / 2) && jobs.length < limit; index++) {
+				const block = blockAt(level, index * 2 ** level);
+				if (skip.has(nodeKey(level, block.startId))) break;
+				const children = await childTexts(level, block);
+				const summary = freeMerge(children);
+				if (summary === undefined && !models) break;
+				jobs.push({ ...block, level, children, summary });
+			}
+			below = built;
 		}
-		return undefined;
+		return jobs;
 	}
 
 	/**
-	 * The next block that needs a model, plus the number of free merges stored on the way: a block
-	 * that needs no model is stored here instead of being returned. `budget` caps those so
-	 * `compact()` honors `maxMerges`. A lost `appendNode` race is left for the next read of the
-	 * cursor to see.
+	 * One compaction round (spec 4.1): the jobs `readyJobs` picks, free merges at once and model
+	 * merges concurrently, then every result stored in level and position order. A failed job goes to
+	 * `failed` and `skip`. The later blocks at its level are refused by `appendNode`, and the next
+	 * round passes over its level. Returns the number of nodes stored.
 	 */
-	async function nextPending(budget: number): Promise<{ block: ModelBlock | undefined; free: number }> {
-		const total = await store.count();
-		let free = 0;
-		let lost: string | undefined;
-		while (free < budget) {
-			const block = await nextPendingBlock(total);
-			if (block === undefined) break;
-			const level = blockLevel(block);
-			const key = nodeKey(level, block.startId);
-			// A lost race leaves the node present, so the cursor moves on. If it did not, the store broke its contract; stop rather than spin.
-			if (key === lost) break;
-			const children = await childTexts(level, block);
-			const summary = freeMerge(children);
-			if (summary === undefined) return { block: { ...block, level, children }, free };
-			if (await store.appendNode({ level, ...block, summary })) free++;
-			else lost = key;
+	async function round(limit: number, models: boolean, skip: Set<string>, failed: Failure[]): Promise<number> {
+		const jobs = await readyJobs(limit, models, skip);
+		const view = jobs.some((job) => job.summary === undefined) ? await viewItems(await store.count()) : [];
+		const outcomes = await Promise.all(
+			jobs.map(async (job) => {
+				try {
+					if (job.summary !== undefined) return { job, summary: job.summary };
+					if (summarizer === undefined) throw new Error(`${label(job)} needs a model and this memory has no summarizer`);
+					return { job, summary: await summarize(summarizer, requestFor(view, job), summaryBytes) };
+				} catch (error) {
+					return { job, error: error instanceof Error ? error.message : String(error) };
+				}
+			}),
+		);
+		let stored = 0;
+		for (const outcome of outcomes) {
+			const { job } = outcome;
+			if ("error" in outcome) {
+				skip.add(nodeKey(job.level, job.startId));
+				failed.push({ startId: job.startId, endId: job.endId, message: outcome.error });
+			} else if (await store.appendNode({ level: job.level, startId: job.startId, endId: job.endId, summary: outcome.summary })) {
+				stored++;
+			}
 		}
-		return { block: undefined, free };
+		return stored;
 	}
 
 	return {
@@ -247,22 +274,16 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 
 		async compact(options) {
 			const maxMerges = options?.maxMerges ?? Number.POSITIVE_INFINITY;
+			const skip = new Set<string>();
+			const failed: Failure[] = [];
 			let merged = 0;
-			let lost: string | undefined;
-			while (merged < maxMerges) {
-				const { block, free } = await nextPending(maxMerges - merged);
-				merged += free;
-				if (block === undefined || summarizer === undefined || merged >= maxMerges) break;
-				const key = nodeKey(block.level, block.startId);
-				// Same guard as `nextPending`: a lost commit must have left the node present, or the store broke its contract.
-				if (key === lost) break;
-				const request = requestFor(await viewItems(await store.count()), block);
-				const summary = await summarize(summarizer, request, summaryBytes);
-				if (await store.appendNode({ level: block.level, startId: block.startId, endId: block.endId, summary })) merged++;
-				else lost = key;
+			for (;;) {
+				const stored = await round(Math.min(JOBS, maxMerges - merged), summarizer !== undefined, skip, failed);
+				merged += stored;
+				await fold();
+				if (stored === 0 || merged >= maxMerges) break;
 			}
-			await fold();
-			return { merged, pending: await pendingCount(await store.count()) };
+			return { merged, pending: await pendingCount(await store.count()), failed };
 		},
 
 		async pending() {
@@ -270,10 +291,15 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		},
 
 		async nextMerge() {
-			const { block, free } = await nextPending(Number.POSITIVE_INFINITY);
+			let free = 0;
+			for (;;) {
+				const stored = await round(JOBS, false, new Set(), []);
+				if (stored === 0) break;
+				free += stored;
+			}
 			if (free > 0) await fold();
-			if (block === undefined) return undefined;
-			return { startId: block.startId, endId: block.endId, request: requestFor(await viewItems(await store.count()), block) };
+			const [job] = await readyJobs(1, true, new Set());
+			return job === undefined ? undefined : { startId: job.startId, endId: job.endId, request: requestFor(await viewItems(await store.count()), job) };
 		},
 
 		async commitMerge(range, summary) {

@@ -11,3 +11,18 @@ export const MemoryObject = defineMemoryObject<Cloudflare.Env>({
  * fit one summary, so every merge needs the client, and the view fits two of its summaries.
  */
 export const ClientSummarizedObject = defineMemoryObject<Cloudflare.Env>({ limits: { summaryBytes: 4, viewBytes: 6 } });
+
+/** Fails its first call and answers "ok" after that. Two notes never fit one summary, so every merge needs it. */
+export const FlakyObject = defineMemoryObject<Cloudflare.Env>({
+	summarizer: () => {
+		let calls = 0;
+		return {
+			async complete() {
+				calls++;
+				if (calls === 1) throw new Error("model down");
+				return "ok";
+			},
+		};
+	},
+	limits: { summaryBytes: 4 },
+});

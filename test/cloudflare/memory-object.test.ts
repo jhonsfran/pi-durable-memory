@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createMemoryClient } from "../../src/cloudflare/index.js";
 import type { Memory } from "../../src/index.js";
@@ -81,6 +81,28 @@ describe("memory Durable Object", () => {
 		expect((await stub.wake()).items).toEqual([
 			{ type: "summary", startId: 0, endId: 1, content: "c01" },
 			{ type: "summary", startId: 2, endId: 3, content: "c23" },
+		]);
+	});
+
+	it("retries a failed summary about 10 s later instead of throwing, and stores it on a later alarm", async () => {
+		const stub = env.MEMORY_FLAKY.get(env.MEMORY_FLAKY.idFromName("flaky"));
+		const alarm = () => runInDurableObject(stub, (_, state) => state.storage.getAlarm());
+		const noted = Date.now();
+		await noteMany(stub, 2);
+		let retryAt = await alarm();
+		// The alarm set by `note` fires on its own a millisecond later; its failure moves the alarm to the retry.
+		while (retryAt === null || retryAt < noted + 5_000) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			retryAt = await alarm();
+		}
+		expect(Math.round((retryAt - noted) / 1000)).toBe(10);
+		expect(await stub.pending()).toBe(1);
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		expect(await stub.pending()).toBe(0);
+		expect(await alarm()).toBeNull();
+		expect(await stub.zoom({ startId: 0, endId: 1 })).toEqual([
+			{ type: "memory", id: 0, createdAt: T0, content: "m0" },
+			{ type: "memory", id: 1, createdAt: T0 + 1, content: "m1" },
 		]);
 	});
 });

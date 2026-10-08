@@ -52,7 +52,7 @@ describe("summarizer conversation", () => {
 		const { memory, store } = await openFixture({ summarizer, limits: { summaryBytes: 16 } });
 		await memory.note({ content: "prefers tabs", createdAt: 0 });
 		await memory.note({ content: "deploys on Fridays", createdAt: 1 });
-		expect(await memory.compact()).toEqual({ merged: 1, pending: 0 });
+		expect(await memory.compact()).toEqual({ merged: 1, pending: 0, failed: [] });
 		expect(requests).toHaveLength(2);
 		expect(requests[1]?.turns).toEqual([
 			{ role: "user", blocks: ["<memory>\nprefers tabs\ndeploys on Fridays\n</memory>", step("prefers tabs\ndeploys on Fridays")] },
@@ -67,7 +67,7 @@ describe("summarizer conversation", () => {
 		const { memory, store } = await openFixture({ summarizer, limits: { summaryBytes: 16 } });
 		await memory.note({ content: "prefers tabs", createdAt: 0 });
 		await memory.note({ content: "deploys on Fridays", createdAt: 1 });
-		expect(await memory.compact()).toEqual({ merged: 1, pending: 0 });
+		expect(await memory.compact()).toEqual({ merged: 1, pending: 0, failed: [] });
 		expect(requests.map((request) => request.turns.length)).toEqual([1, 3, 5, 7, 9]);
 		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "d".repeat(22) }]);
 	});

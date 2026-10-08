@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { label } from "../core/block.js";
 import { createMemory } from "../core/memory.js";
 import type { CompactOptions, Memory, MemoryLimits, MemoryRange, MemorySummarizer, NoteInput, RecallOptions } from "../core/types.js";
 import { createSqliteMemoryStore } from "../sqlite/store.js";
@@ -24,6 +25,9 @@ export type MemoryObjectClass<Env> = typeof DurableObject<Env> & (new (ctx: Dura
 /** The Durable Object id is the scope; the store's scope column exists only so the test suites can hold several scopes in one database. */
 const SCOPE = "self";
 
+/** Wait before an alarm retries a failed summary (spec 4.1). */
+const RETRY_MS = 10_000;
+
 /**
  * A Durable Object class holding one memory scope, named by the scope string. With a summarizer it
  * compacts from an alarm after every write, so callers never run `compact()` themselves.
@@ -34,6 +38,8 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 
 	return class MemoryObject extends DurableObject<Env> implements Memory {
 		private memory: Promise<Memory> | undefined;
+		/** Blocks whose failure this instance has logged, so a block that keeps failing is logged once. */
+		private readonly reported = new Set<string>();
 
 		private open(): Promise<Memory> {
 			this.memory ??= createSqliteMemoryStore(durableObjectSql(this.ctx.storage), { scope: SCOPE }).then(
@@ -57,12 +63,22 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 			if (summarizer !== undefined) await this.ctx.storage.setAlarm(Date.now() + 1);
 		}
 
+		/**
+		 * A summarizer failure retries after `RETRY_MS` instead of throwing: the platform's alarm backoff
+		 * grows and gives up after six retries, while the view waits on these summaries.
+		 */
 		override async alarm(): Promise<void> {
 			if (summarizer === undefined) return;
 			const memory = await this.open();
-			await memory.compact({ maxMerges: mergesPerAlarm });
+			const { failed } = await memory.compact({ maxMerges: mergesPerAlarm });
+			for (const failure of failed) {
+				if (this.reported.has(label(failure))) continue;
+				this.reported.add(label(failure));
+				console.error(`Summarizing ${label(failure)} failed, retrying every ${RETRY_MS / 1000} s: ${failure.message}`);
+			}
+			if (failed.length > 0) await this.ctx.storage.setAlarm(Date.now() + RETRY_MS);
 			// Re-read instead of trusting `compact()`'s count: a write that landed during the run is not in it.
-			if ((await memory.pending()) > 0) await this.scheduleCompaction();
+			else if ((await memory.pending()) > 0) await this.scheduleCompaction();
 		}
 
 		async note(input: NoteInput) {
