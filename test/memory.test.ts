@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong, formatMemoryContext } from "../src/index.js";
-import type { MemoryItem, MemoryRange, MemoryStore, MemorySummarizer, SummarizeInput } from "../src/index.js";
-import { constantSummarizer, noteMany, openFixture, refusingSummarizer, seedMemoriesBySql } from "./helpers.js";
-
-/** The memories `start..end` as a free merge writes them. */
-const joined = (start: number, end: number): string => Array.from({ length: end - start + 1 }, (_, i) => `m${start + i}`).join(" / ");
+import type { MemorySummarizer, SummarizeInput } from "../src/index.js";
+import { noteMany, openFixture, refusingSummarizer } from "./helpers.js";
 
 describe("memory", () => {
 	it("notes with sourceIds, compacts, wakes with both memories and recalls the second", async () => {
@@ -65,117 +62,6 @@ describe("memory", () => {
 			"s0-7", "s8-15",
 			"s0-7 / s8-15",
 		]);
-	});
-
-	it("wakes with at most 96 items that tile the whole log and end on the newest memory", async () => {
-		const { memory } = await openFixture({ limits: { maxEntryBytes: 8192 } });
-		await noteMany(memory, 1000);
-		await memory.compact();
-		const { items, total } = await memory.wake();
-		expect(total).toBe(1000);
-		expect(items.length).toBe(96);
-		expect(items[0]).toEqual({ type: "summary", startId: 0, endId: 63, content: joined(0, 63) });
-		expect(items[items.length - 1]).toEqual({ type: "memory", id: 999, createdAt: 1_700_000_000_999, content: "m999" });
-		let next = 0;
-		for (const item of items) {
-			const range = item.type === "memory" ? { startId: item.id, endId: item.id } : item;
-			expect(item.type).not.toBe("pending");
-			expect(range.startId).toBe(next);
-			next = range.endId + 1;
-		}
-		expect(next).toBe(1000);
-	});
-
-	it("wakes 100k memories with one read per kind and at most 96 rows", async () => {
-		const calls: Record<string, number> = {};
-		let rows = 0;
-		const scope = "big";
-		const counting = (store: MemoryStore): MemoryStore =>
-			new Proxy(store, {
-				get(target, method: keyof MemoryStore) {
-					return async (...args: unknown[]) => {
-						calls[method] = (calls[method] ?? 0) + 1;
-						const result = await (target[method] as (...a: unknown[]) => Promise<unknown>)(...args);
-						if (Array.isArray(result)) rows += result.length;
-						return result;
-					};
-				},
-			});
-		const { db, memory } = await openFixture({ scope, store: counting, summarizer: constantSummarizer });
-		const started = performance.now();
-		await seedMemoriesBySql(db, scope, 100_000);
-		expect(await memory.compact()).toEqual({ merged: 99_994, pending: 0 });
-		const seeded = performance.now();
-		Object.keys(calls).forEach((key) => delete calls[key]);
-		rows = 0;
-		const { items, total } = await memory.wake();
-		const woke = performance.now();
-		console.log(`100k: seed+compact ${Math.round(seeded - started)}ms, wake ${Math.round(woke - seeded)}ms`);
-		expect(total).toBe(100_000);
-		expect(items.length).toBe(96);
-		expect(items[0]).toEqual({ type: "summary", startId: 0, endId: 8191, content: Array(64).fill("x").join(" / ") });
-		expect(items[95]).toEqual({ type: "memory", id: 99_999, createdAt: 99_999, content: "m99999" });
-		expect(calls).toEqual({ count: 1, getMemories: 1, getNodes: 1 });
-		expect(rows).toBeLessThanOrEqual(96);
-		expect(woke - seeded).toBeLessThan(1000);
-	});
-
-	it("wakes with pending blocks before compaction and none after", async () => {
-		const { memory } = await openFixture();
-		await noteMany(memory, 100);
-		const before = await memory.wake();
-		expect(before.items.length).toBe(96);
-		expect(before.items.slice(0, 5)).toEqual([
-			{ type: "pending", startId: 0, endId: 1 },
-			{ type: "pending", startId: 2, endId: 3 },
-			{ type: "pending", startId: 4, endId: 5 },
-			{ type: "pending", startId: 6, endId: 7 },
-			{ type: "memory", id: 8, createdAt: 1_700_000_000_008, content: "m8" },
-		]);
-		expect(formatMemoryContext(before).split("\n").slice(0, 5)).toEqual(["#0-1 (not summarized yet)", "#2-3 (not summarized yet)", "#4-5 (not summarized yet)", "#6-7 (not summarized yet)", "#8 m8"]);
-		await memory.compact();
-		const after = await memory.wake();
-		expect(after.items.length).toBe(96);
-		expect(after.items.slice(0, 5)).toEqual([
-			{ type: "summary", startId: 0, endId: 1, content: "m0 / m1" },
-			{ type: "summary", startId: 2, endId: 3, content: "m2 / m3" },
-			{ type: "summary", startId: 4, endId: 5, content: "m4 / m5" },
-			{ type: "summary", startId: 6, endId: 7, content: "m6 / m7" },
-			{ type: "memory", id: 8, createdAt: 1_700_000_000_008, content: "m8" },
-		]);
-		expect(after.items.filter((item) => item.type === "pending")).toEqual([]);
-	});
-
-	it("zooms from the root block down to memory 0 and rejects ranges that are not blocks", async () => {
-		const { memory } = await openFixture({ limits: { summaryBytes: 8192 } });
-		await noteMany(memory, 1000);
-		await memory.compact();
-		const root = await memory.zoom({ startId: 0, endId: 511 });
-		expect(root.map((item) => (item.type === "summary" ? [item.startId, item.endId] : item.type))).toEqual([[0, 255], [256, 511]]);
-		let range: MemoryRange = { startId: 0, endId: 511 };
-		let steps = 0;
-		let first: MemoryItem | undefined;
-		while (steps < 10) {
-			first = (await memory.zoom(range))[0];
-			steps++;
-			if (first?.type !== "summary") break;
-			range = first;
-		}
-		expect(steps).toBe(9);
-		expect(first).toEqual({ type: "memory", id: 0, createdAt: 1_700_000_000_000, content: "m0" });
-		expect(await memory.zoom({ startId: 998, endId: 999 })).toEqual([
-			{ type: "memory", id: 998, createdAt: 1_700_000_000_998, content: "m998" },
-			{ type: "memory", id: 999, createdAt: 1_700_000_000_999, content: "m999" },
-		]);
-		expect(await memory.zoom({ startId: 992, endId: 1007 })).toEqual([{ type: "summary", startId: 992, endId: 999, content: joined(992, 999) }]);
-		expect(await memory.zoom({ startId: 512, endId: 1023 })).toEqual([
-			{ type: "summary", startId: 512, endId: 767, content: joined(512, 767) },
-			{ type: "pending", startId: 768, endId: 1023 },
-		]);
-		await expect(memory.zoom({ startId: 1, endId: 2 })).rejects.toThrow(InvalidRange);
-		await expect(memory.zoom({ startId: 4, endId: 4 })).rejects.toThrow(InvalidRange);
-		await expect(memory.zoom({ startId: 0, endId: 2 })).rejects.toThrow(InvalidRange);
-		await expect(memory.zoom({ startId: 1000, endId: 1001 })).rejects.toThrow(InvalidRange);
 	});
 
 	it("stops after maxMerges and reports what is still pending", async () => {

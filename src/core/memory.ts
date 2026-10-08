@@ -1,8 +1,10 @@
-import { blockAt, blockLevel, blockSize, childrenOf, cover, isAlignedBlock, label } from "./cover.js";
+import { blockAt, blockLevel, blockSize, childrenOf, isAlignedBlock, label } from "./block.js";
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong } from "./errors.js";
 import type { CreateMemoryOptions, Memory, MemoryEntry, MemoryItem, MemoryLimits, MemoryNode, MemoryRange, SummarizeInput } from "./types.js";
+import { foldView } from "./view.js";
+import type { FoldSource, Part } from "./view.js";
 
-const DEFAULT_LIMITS: MemoryLimits = { maxEntryBytes: 280, summaryBytes: 512, maxItems: 96 };
+const DEFAULT_LIMITS: MemoryLimits = { maxEntryBytes: 280, summaryBytes: 512, viewBytes: 16_384 };
 const DEFAULT_RECALL_LIMIT = 10;
 
 const encoder = new TextEncoder();
@@ -29,6 +31,11 @@ const nodeKey = (level: number, startId: number): string => `${level}:${startId}
 /** A memory nobody has superseded; only these reach the model and the summarizer. */
 const live = (entry: MemoryEntry): boolean => entry.supersededBy === undefined;
 
+const shown = (item: MemoryItem | undefined): item is MemoryItem => item !== undefined;
+
+/** The first memory id a view does not cover. */
+const endOf = (view: readonly MemoryRange[]): number => (view.at(-1)?.endId ?? -1) + 1;
+
 function assertBlock(range: MemoryRange): void {
 	if (!isAlignedBlock(range) || blockSize(range) < 2) {
 		throw new InvalidRange(`${label(range)} is not a block: use an aligned power-of-two range of at least 2 memories, like #16-31`);
@@ -47,10 +54,10 @@ function contiguousRuns(blocks: readonly MemoryRange[]): MemoryRange[] {
 }
 
 export function createMemory({ store, summarizer, limits }: CreateMemoryOptions): Memory {
-	const { maxEntryBytes, summaryBytes, maxItems } = { ...DEFAULT_LIMITS, ...limits };
+	const { maxEntryBytes, summaryBytes, viewBytes } = { ...DEFAULT_LIMITS, ...limits };
 
-	/** Each block rendered as `wake()` shows it, in the given order, with one read per kind. */
-	async function render(blocks: readonly MemoryRange[]): Promise<MemoryItem[]> {
+	/** Each block as `wake()` shows it, in the given order, with one read per kind; `undefined` for a superseded memory or an empty summary. */
+	async function read(blocks: readonly MemoryRange[]): Promise<(MemoryItem | undefined)[]> {
 		const singles = blocks.filter((block) => blockSize(block) === 1);
 		const wide = blocks.filter((block) => blockSize(block) > 1);
 		const [memoryRuns, nodes] = await Promise.all([
@@ -59,19 +66,82 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		]);
 		const memories = new Map<number, MemoryEntry>(memoryRuns.flat().map((entry) => [entry.id, entry]));
 		const summaries = new Map<string, MemoryNode>(nodes.map((node) => [nodeKey(node.level, node.startId), node]));
-		return blocks.flatMap((block): MemoryItem[] => {
+		return blocks.map((block): MemoryItem | undefined => {
 			if (blockSize(block) === 1) {
 				const entry = memories.get(block.startId);
 				if (entry === undefined) throw new Error(`Memory ${label(block)} is inside the log but the store has no entry for it`);
-				return live(entry) ? [{ type: "memory", id: entry.id, createdAt: entry.createdAt, content: entry.content }] : [];
+				return live(entry) ? { type: "memory", id: entry.id, createdAt: entry.createdAt, content: entry.content } : undefined;
 			}
 			const node = summaries.get(nodeKey(blockLevel(block), block.startId));
-			return [
-				node === undefined
-					? { type: "pending", startId: block.startId, endId: block.endId }
-					: { type: "summary", startId: block.startId, endId: block.endId, content: node.summary },
-			];
+			if (node === undefined) throw new Error(`${label(block)} is shown but has no node`);
+			return node.summary.length > 0 ? { type: "summary", startId: block.startId, endId: block.endId, content: node.summary } : undefined;
 		});
+	}
+
+	/** The stored view, then one part per memory no fold has reached yet. */
+	async function currentView(total: number): Promise<MemoryRange[]> {
+		const stored = await store.readView();
+		const end = endOf(stored);
+		return [...stored, ...Array.from({ length: Math.max(0, total - end) }, (_, i) => blockAt(0, end + i))];
+	}
+
+	/** Sizes for one fold: the memories and nodes given are known, any other built node is read on first use. */
+	function foldSource(levelLengths: readonly number[], memories: readonly MemoryEntry[], nodes: readonly MemoryNode[]): FoldSource {
+		const sizes = new Map<string, number>();
+		for (const entry of memories) sizes.set(nodeKey(0, entry.id), live(entry) ? byteLength(entry.content) : 0);
+		for (const node of nodes) sizes.set(nodeKey(node.level, node.startId), byteLength(node.summary));
+		return {
+			levelLengths,
+			async bytes(range) {
+				const level = blockLevel(range);
+				const known = sizes.get(nodeKey(level, range.startId));
+				if (known !== undefined) return known;
+				const [node] = await store.getNodes([{ level, startId: range.startId }]);
+				if (node === undefined) throw new Error(`The fold needs ${label(range)}, which its level's length counts as built, but the store has no such node`);
+				return byteLength(node.summary);
+			},
+		};
+	}
+
+	/** Brings the stored view up to the log and the built nodes, then writes only what changed. Idempotent: a fold after a crash appends what the last one missed. */
+	async function foldOnce(): Promise<void> {
+		const total = await store.count();
+		const stored = await store.readView();
+		const end = endOf(stored);
+		const levels = Array.from({ length: total < 2 ? 1 : Math.floor(Math.log2(total)) + 1 }, (_, level) => level);
+		let source: FoldSource;
+		if (stored.length === 0 && total > 0) {
+			// No stored view: a new scope, or one written before the view existed. One read of the whole log and tree replaces a read per memory.
+			const [entries, nodes] = await Promise.all([store.getMemories({ startId: 0, endId: total - 1 }), store.listNodes()]);
+			const levelLengths = levels.map(() => 0);
+			for (const node of nodes) levelLengths[node.level] = Math.max(levelLengths[node.level] ?? 0, node.startId / 2 ** node.level + 1);
+			source = foldSource(levelLengths, entries, nodes);
+		} else {
+			const [entries, levelLengths] = await Promise.all([
+				end < total ? store.getMemories({ startId: end, endId: total - 1 }) : [],
+				Promise.all(levels.map((level) => (level === 0 ? 0 : store.levelLength(level)))),
+			]);
+			source = foldSource(levelLengths, entries, []);
+		}
+		const items = await read(stored);
+		const parts: Part[] = stored.map((range, index) => {
+			const item = items[index];
+			return { level: blockLevel(range), startId: range.startId, bytes: item === undefined ? 0 : byteLength(item.content) };
+		});
+		await foldView(parts, end, total, viewBytes, source);
+		const before = new Map(stored.map((range) => [range.startId, blockLevel(range)]));
+		const after = new Set(parts.map((part) => part.startId));
+		const put = parts.filter((part) => before.get(part.startId) !== part.level).map((part) => blockAt(part.level, part.startId));
+		const drop = stored.filter((range) => !after.has(range.startId)).map((range) => range.startId);
+		if (put.length > 0 || drop.length > 0) await store.writeView({ put, drop });
+	}
+
+	let folding: Promise<void> = Promise.resolve();
+	/** One fold at a time, so no fold writes a change computed from a view another fold has moved since. */
+	function fold(): Promise<void> {
+		const run = folding.then(foldOnce);
+		folding = run.catch(() => {});
+		return run;
 	}
 
 	/** The two children of a block, oldest first: two memories at level 1, two nodes one level down above it. A superseded memory reads as "". */
@@ -141,7 +211,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		return { input: undefined, free };
 	}
 
-	async function commitMerge(range: MemoryRange, summary: string): Promise<boolean> {
+	async function appendSummary(range: MemoryRange, summary: string): Promise<boolean> {
 		assertBlock(range);
 		return store.appendNode({ level: blockLevel(range), startId: range.startId, endId: range.endId, summary: truncateUtf8(normalizeEntry(summary), summaryBytes) });
 	}
@@ -158,12 +228,14 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 					throw new InvalidRange(`#${supersedes} is not in the memory: it holds ${total} memories`);
 				}
 			}
-			return store.appendMemory({ content, createdAt: input.createdAt ?? Date.now(), sourceId: input.sourceId, supersedes });
+			const entry = await store.appendMemory({ content, createdAt: input.createdAt ?? Date.now(), sourceId: input.sourceId, supersedes });
+			await fold();
+			return entry;
 		},
 
-		async wake(options) {
+		async wake() {
 			const total = await store.count();
-			const items = await render(cover(total, options?.maxItems ?? maxItems));
+			const items = (await read(await currentView(total))).filter(shown);
 			return { items, total };
 		},
 
@@ -174,10 +246,9 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		},
 
 		async zoom(range) {
-			assertBlock(range);
-			const total = await store.count();
-			if (range.startId >= total) throw new InvalidRange(`${label(range)} is beyond the memory: it holds ${total} memories`);
-			return render(childrenOf(range).filter((half) => half.startId < total));
+			const built = isAlignedBlock(range) && blockSize(range) >= 2 && (await store.getNodes([{ level: blockLevel(range), startId: range.startId }])).length > 0;
+			if (!built) throw new InvalidRange(`${label(range)} is not a summary you can open: zoom a #a-b line you saw in memory or in an earlier zoom`);
+			return (await read(childrenOf(range))).filter(shown);
 		},
 
 		async compact(options) {
@@ -191,9 +262,10 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 				const key = nodeKey(blockLevel(input), input.startId);
 				// Same guard as `nextPending`: a lost commit must have left the node present, or the store broke its contract.
 				if (key === lost) break;
-				if (await commitMerge(input, await summarizer.summarize(input))) merged++;
+				if (await appendSummary(input, await summarizer.summarize(input))) merged++;
 				else lost = key;
 			}
+			await fold();
 			return { merged, pending: await pendingCount(await store.count()) };
 		},
 
@@ -202,9 +274,15 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		},
 
 		async nextMerge() {
-			return (await nextPending(Number.POSITIVE_INFINITY)).input;
+			const { input, free } = await nextPending(Number.POSITIVE_INFINITY);
+			if (free > 0) await fold();
+			return input;
 		},
 
-		commitMerge,
+		async commitMerge(range, summary) {
+			const stored = await appendSummary(range, summary);
+			if (stored) await fold();
+			return stored;
+		},
 	};
 }

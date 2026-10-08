@@ -7,7 +7,7 @@ export function createMemoryClient(namespace: DurableObjectNamespace<MemoryObjec
 		const stub = namespace.get(namespace.idFromName(scope));
 		return {
 			note: (input) => stub.note(input),
-			wake: (options) => stub.wake(options),
+			wake: () => stub.wake(),
 			recall: (query, options) => stub.recall(query, options),
 			zoom: (range) => stub.zoom(range),
 			compact: (options) => stub.compact(options),

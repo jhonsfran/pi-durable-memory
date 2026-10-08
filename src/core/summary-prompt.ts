@@ -1,4 +1,4 @@
-import { label } from "./cover.js";
+import { label } from "./block.js";
 import type { SummarizeInput } from "./types.js";
 
 /**

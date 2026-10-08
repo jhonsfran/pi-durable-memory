@@ -78,6 +78,19 @@ describe("sqlite store", () => {
 		]);
 	});
 
+	it("keeps one view per scope, where put adds or replaces a part and drop removes one", async () => {
+		const db = openNodeSqlite(":memory:");
+		const a = await openFixture({ db, scope: "a" });
+		const b = await openFixture({ db, scope: "b" });
+		await a.store.writeView({ put: [{ startId: 0, endId: 0 }, { startId: 1, endId: 1 }, { startId: 2, endId: 2 }], drop: [] });
+		await a.store.writeView({ put: [{ startId: 0, endId: 1 }], drop: [1] });
+		expect(await a.store.readView()).toEqual([
+			{ startId: 0, endId: 1 },
+			{ startId: 2, endId: 2 },
+		]);
+		expect(await b.store.readView()).toEqual([]);
+	});
+
 	it("appends a node only when it is next at its level and its children exist", async () => {
 		const { store } = await openFixture();
 		await store.appendMemory({ content: "m0", createdAt: 0 });

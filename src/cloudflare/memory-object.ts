@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { createMemory } from "../core/memory.js";
-import type { CompactOptions, Memory, MemoryLimits, MemoryRange, MemorySummarizer, NoteInput, RecallOptions, WakeOptions } from "../core/types.js";
+import type { CompactOptions, Memory, MemoryLimits, MemoryRange, MemorySummarizer, NoteInput, RecallOptions } from "../core/types.js";
 import { createSqliteMemoryStore } from "../sqlite/store.js";
 import { durableObjectSql } from "./sql.js";
 
@@ -71,8 +71,8 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 			return entry;
 		}
 
-		async wake(options?: WakeOptions) {
-			return (await this.open()).wake(options);
+		async wake() {
+			return (await this.open()).wake();
 		}
 
 		async recall(query: string, options?: RecallOptions) {

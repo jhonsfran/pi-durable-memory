@@ -19,7 +19,6 @@ export type {
 	RecallMatch,
 	RecallOptions,
 	SummarizeInput,
-	WakeOptions,
 } from "./core/types.js";
 export { createRetrievalAdmission } from "./pi/admission.js";
 export type { AdmissionJudge, AdmissionNeighbor, JudgeInput, JudgeVerdict } from "./pi/admission.js";

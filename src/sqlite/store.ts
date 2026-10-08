@@ -1,3 +1,4 @@
+import { blockAt, blockLevel } from "../core/block.js";
 import type { MemoryEntry, MemoryNode, MemoryStore, RecallMatch } from "../core/types.js";
 import type { SqlDatabase, SqlExecutor } from "./database.js";
 
@@ -19,6 +20,12 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
 	end_id INTEGER NOT NULL,
 	summary TEXT NOT NULL,
 	PRIMARY KEY (scope, level, start_id)
+);
+CREATE TABLE IF NOT EXISTS memory_view (
+	scope TEXT NOT NULL,
+	start_id INTEGER NOT NULL,
+	level INTEGER NOT NULL,
+	PRIMARY KEY (scope, start_id)
 );
 `;
 
@@ -227,5 +234,24 @@ export async function createSqliteMemoryStore(db: SqlDatabase, options: { readon
 		},
 
 		levelLength: (level) => levelLengthOf(db, scope, level),
+
+		async listNodes() {
+			const rows = await db.all<NodeRow>("SELECT level, start_id, end_id, summary FROM memory_nodes WHERE scope = ? ORDER BY level, start_id", scope);
+			return rows.map(toNode);
+		},
+
+		async readView() {
+			const rows = await db.all<{ start_id: number; level: number }>("SELECT start_id, level FROM memory_view WHERE scope = ? ORDER BY start_id", scope);
+			return rows.map((row) => blockAt(row.level, row.start_id));
+		},
+
+		writeView({ put, drop }) {
+			return db.transaction(async (tx) => {
+				for (const startId of drop) await tx.run("DELETE FROM memory_view WHERE scope = ? AND start_id = ?", scope, startId);
+				for (const range of put) {
+					await tx.run("INSERT OR REPLACE INTO memory_view (scope, start_id, level) VALUES (?, ?, ?)", scope, range.startId, blockLevel(range));
+				}
+			});
+		},
 	};
 }

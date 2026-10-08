@@ -11,16 +11,18 @@ export const joinSummarizer: MemorySummarizer = {
 	},
 };
 
+/** Writes `mA..mB` from the first memory its children mention to the last, so every summary names the block it covers. */
+export const spanSummarizer: MemorySummarizer = {
+	async summarize({ items }) {
+		const ids = items.map((item) => item.content).join(" ").match(/m\d+/g) ?? [];
+		return `${ids[0]}..${ids.at(-1)}`;
+	},
+};
+
 /** Fails the test that reaches it: for paths that must not call a model. */
 export const refusingSummarizer: MemorySummarizer = {
 	async summarize() {
 		throw new Error("the summarizer was called");
-	},
-};
-
-export const constantSummarizer: MemorySummarizer = {
-	async summarize() {
-		return "x";
 	},
 };
 
@@ -51,6 +53,18 @@ export async function openFixture(
 
 export async function noteMany(memory: Memory, count: number): Promise<void> {
 	for (let id = 0; id < count; id++) await memory.note({ content: `m${id}`, createdAt: 1_700_000_000_000 + id });
+}
+
+/** Inserts every node a log of `count` memories can have, straight into the table, each summarized as `summary(level, startId)`. */
+export async function seedNodesBySql(db: SqlDatabase, scope: string, count: number, summary: (level: number, startId: number) => string): Promise<void> {
+	await db.transaction(async (tx) => {
+		for (let level = 1; 2 ** level <= count; level++) {
+			const size = 2 ** level;
+			for (let startId = 0; startId + size <= count; startId += size) {
+				await tx.run("INSERT INTO memory_nodes (scope, level, start_id, end_id, summary) VALUES (?, ?, ?, ?, ?)", scope, level, startId, startId + size - 1, summary(level, startId));
+			}
+		}
+	});
 }
 
 /** Inserts `count` memories for `scope` straight into the table, bypassing the store and its FTS index. */

@@ -79,7 +79,7 @@ describe("memory Durable Object", () => {
 			expect(await stub.commitMerge(input, `c${input.startId}${input.endId}`)).toBe(true);
 		}
 		expect(await stub.pending()).toBe(0);
-		expect((await stub.wake({ maxItems: 2 })).items).toEqual([
+		expect((await stub.wake()).items).toEqual([
 			{ type: "summary", startId: 0, endId: 1, content: "c01" },
 			{ type: "summary", startId: 2, endId: 3, content: "c23" },
 		]);

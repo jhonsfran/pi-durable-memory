@@ -10,5 +10,8 @@ export const MemoryObject = defineMemoryObject<Cloudflare.Env>({
 	mergesPerAlarm: 2,
 });
 
-/** No summarizer: nothing schedules an alarm, and the test commits summaries itself. Two notes never fit one summary, so every merge needs the client. */
-export const ClientSummarizedObject = defineMemoryObject<Cloudflare.Env>({ limits: { summaryBytes: 4 } });
+/**
+ * No summarizer: nothing schedules an alarm, and the test commits summaries itself. Two notes never
+ * fit one summary, so every merge needs the client, and the view fits two of its summaries.
+ */
+export const ClientSummarizedObject = defineMemoryObject<Cloudflare.Env>({ limits: { summaryBytes: 4, viewBytes: 6 } });

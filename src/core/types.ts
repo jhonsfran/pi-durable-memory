@@ -1,8 +1,9 @@
 /**
  * The data shape of one memory scope.
  *
- * A scope is one append-only log of memories, identified by position, plus a binary tree of
- * summaries built over aligned power-of-two blocks of that log. The core knows nothing about
+ * A scope is one append-only log of memories, identified by position, a binary tree of summaries
+ * built over aligned power-of-two blocks of that log, and the view: the blocks `wake()` shows,
+ * stored and changed only by appending and merging. The core knows nothing about
  * scopes beyond "this instance is one of them": multi-scope composition (one Durable Object per
  * scope) lives outside `createMemory()`.
  *
@@ -36,16 +37,10 @@ export interface MemoryNode extends MemoryRange {
 	readonly summary: string;
 }
 
-/**
- * What `wake()` and `zoom()` hand to the caller, oldest first.
- *
- * `pending` is a block whose summary compaction has not produced yet. It keeps the item budget
- * exact and tells the model the block exists so it can `zoom()` into it.
- */
+/** What `wake()` and `zoom()` hand to the caller, oldest first: a memory verbatim, or the summary of a built node. */
 export type MemoryItem =
 	| { readonly type: "memory"; readonly id: number; readonly createdAt: number; readonly content: string }
-	| { readonly type: "summary"; readonly startId: number; readonly endId: number; readonly content: string }
-	| { readonly type: "pending"; readonly startId: number; readonly endId: number };
+	| { readonly type: "summary"; readonly startId: number; readonly endId: number; readonly content: string };
 
 export interface MemoryContext {
 	readonly items: readonly MemoryItem[];
@@ -61,11 +56,6 @@ export interface NoteInput {
 	readonly createdAt?: number | undefined;
 	/** Id of an existing memory this one replaces. Throws `InvalidRange` when it is not in the log. */
 	readonly supersedes?: number | undefined;
-}
-
-export interface WakeOptions {
-	/** Upper bound on `MemoryContext.items.length`. Defaults to `MemoryLimits.maxItems`. */
-	readonly maxItems?: number | undefined;
 }
 
 /** `all`: every query word must match. `any`: one word is enough, best match first. */
@@ -94,8 +84,8 @@ export interface MemoryLimits {
 	readonly maxEntryBytes: number;
 	/** Target size of a summary, in UTF-8 bytes. Two children that fit in it together are joined without a model. A model summary over it is truncated to it. Default 512. */
 	readonly summaryBytes: number;
-	/** Default `wake()` item budget. Default 96. */
-	readonly maxItems: number;
+	/** Budget of `wake()`: the UTF-8 bytes of its items' text. The view merges old lines while it is over, once their parents are built. Default 16,384. */
+	readonly viewBytes: number;
 }
 
 /** What a summarizer sees: the block to merge and its two children, two memories or two child summaries. */
@@ -111,11 +101,19 @@ export interface MemorySummarizer {
 
 /** One scope's memory. Every method is safe to call concurrently with the others and to retry after a crash. */
 export interface Memory {
+	/** Append a memory, then fold it into the view. */
 	note(input: NoteInput): Promise<MemoryEntry>;
-	wake(options?: WakeOptions): Promise<MemoryContext>;
+	/**
+	 * The view: aligned blocks that tile the whole log, oldest first, each a memory or a built
+	 * summary, never a placeholder. Between two calls it only gains memories at its end and merges
+	 * pairs of lines into their parent. It stays within `viewBytes` once compaction has built the
+	 * parents it needs, and shows every memory before that. Superseded memories and empty summaries
+	 * are left out.
+	 */
+	wake(): Promise<MemoryContext>;
 	/** Memories whose text contains every word of the query, newest first; with `match: "any"`, memories containing at least one word, best match first. Superseded memories are excluded. */
 	recall(query: string, options?: RecallOptions): Promise<MemoryEntry[]>;
-	/** The two halves of one block, each rendered as `wake()` renders it. Throws `InvalidRange` for a range that is not an aligned block inside the log. */
+	/** The two halves of a built summary, each rendered as `wake()` renders it. Throws `InvalidRange` for any range that is not a built node. */
 	zoom(range: MemoryRange): Promise<MemoryItem[]>;
 	compact(options?: CompactOptions): Promise<CompactResult>;
 	/** Merges that `compact()` would perform now. */
@@ -134,8 +132,8 @@ export interface Memory {
  * Storage for one scope. The core algorithm runs against this interface; `createSqliteMemoryStore`
  * implements it over the Durable Object's SQLite.
  *
- * Nodes at one level form a dense prefix from `startId` 0: `compact()` builds them in order and
- * never deletes one. `levelLength()` relies on that invariant.
+ * Nodes at one level form a dense prefix from `startId` 0: `appendNode()` only adds the next one and
+ * nothing deletes one. `levelLength()` relies on that invariant.
  */
 export interface MemoryStore {
 	count(): Promise<number>;
@@ -158,6 +156,12 @@ export interface MemoryStore {
 	appendNode(node: MemoryNode): Promise<boolean>;
 	/** Number of nodes at `level`, which by invariant are the blocks `0 .. n-1` of that level. */
 	levelLength(level: number): Promise<number>;
+	/** Every node of the scope, by level and then position. */
+	listNodes(): Promise<MemoryNode[]>;
+	/** The stored view, oldest first. */
+	readView(): Promise<MemoryRange[]>;
+	/** Remove the parts starting at `drop` and store `put`, replacing a part with the same start, in one transaction. */
+	writeView(change: { readonly put: readonly MemoryRange[]; readonly drop: readonly number[] }): Promise<void>;
 }
 
 export interface CreateMemoryOptions {

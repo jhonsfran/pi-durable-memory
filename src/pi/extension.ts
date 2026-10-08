@@ -37,14 +37,9 @@ export interface PiMemoryExtensionOptions {
 	readonly admission?: MemoryAdmission | undefined;
 	/** Scopes a conversation reads and may write, in order. The first is the default write scope. */
 	readonly scopes: (input: { readonly conversationId: string }) => readonly string[] | Promise<readonly string[]>;
-	/** Wake budget across scopes. Default 96, split equally, with a floor of 8 per scope. */
-	readonly maxItems?: number | undefined;
 	/** Extension name. Default "memory". */
 	readonly name?: string | undefined;
 }
-
-const DEFAULT_MAX_ITEMS = 96;
-const MIN_ITEMS_PER_SCOPE = 8;
 
 const ADMIT_AS_GIVEN: MemoryAdmission = { evaluate: () => ({ admit: true }) };
 
@@ -94,17 +89,15 @@ const renderScope = (scope: string, body: string): string => `[${scope}]\n${body
 export function createPiMemoryExtension(options: PiMemoryExtensionOptions): Extension {
 	const name = options.name ?? "memory";
 	const admission = options.admission ?? ADMIT_AS_GIVEN;
-	const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS;
 	const scopesOf = (conversationId: number): Promise<readonly string[]> =>
 		Promise.resolve(options.scopes({ conversationId: String(conversationId) }));
 
 	const memorySection = section("memory", async (input) => {
 		const scopes = await scopesOf(input.conversationId);
 		if (scopes.length === 0) return undefined;
-		const perScope = Math.max(MIN_ITEMS_PER_SCOPE, Math.floor(maxItems / scopes.length));
 		const blocks = await Promise.all(
 			scopes.map(async (scope) => {
-				const context = await (await options.memory(scope)).wake({ maxItems: perScope });
+				const context = await (await options.memory(scope)).wake();
 				return renderScope(scope, context.items.length === 0 ? "(no memories yet)" : formatMemoryContext(context));
 			}),
 		);
