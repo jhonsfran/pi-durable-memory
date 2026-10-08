@@ -98,11 +98,5 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 		async commitMerge(range: MemoryRange, summary: string) {
 			return (await this.open()).commitMerge(range, summary);
 		}
-
-		async forget(range: MemoryRange) {
-			const dropped = await (await this.open()).forget(range);
-			if (dropped > 0) await this.scheduleCompaction();
-			return dropped;
-		}
 	};
 }

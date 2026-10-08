@@ -14,7 +14,6 @@ export function createMemoryClient(namespace: DurableObjectNamespace<MemoryObjec
 			pending: () => stub.pending(),
 			nextMerge: () => stub.nextMerge(),
 			commitMerge: (range, summary) => stub.commitMerge(range, summary),
-			forget: (range) => stub.forget(range),
 		};
 	};
 }

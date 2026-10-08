@@ -200,16 +200,5 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		},
 
 		commitMerge,
-
-		async forget(range) {
-			assertBlock(range);
-			const total = await store.count();
-			let dropped = 0;
-			for (let level = blockLevel(range); 2 ** level <= total; level++) {
-				const size = 2 ** level;
-				dropped += await store.truncateLevel(level, Math.floor(range.startId / size) * size);
-			}
-			return dropped;
-		},
 	};
 }

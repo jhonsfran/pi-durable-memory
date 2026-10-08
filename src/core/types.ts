@@ -128,8 +128,6 @@ export interface Memory {
 	nextMerge(): Promise<SummarizeInput | undefined>;
 	/** Store the summary for a block `nextMerge()` returned. False when that block is no longer pending. The summary is normalized and truncated like a note. */
 	commitMerge(range: MemoryRange, summary: string): Promise<boolean>;
-	/** Drop one summary and every summary built from it. The next `compact()` rebuilds them. Raw memories are never touched. Returns the number of nodes dropped. */
-	forget(range: MemoryRange): Promise<number>;
 }
 
 /**
@@ -137,7 +135,7 @@ export interface Memory {
  * implements it over the Durable Object's SQLite.
  *
  * Nodes at one level form a dense prefix from `startId` 0: `compact()` builds them in order and
- * `truncateLevel()` is the only deletion. `levelLength()` relies on that invariant.
+ * never deletes one. `levelLength()` relies on that invariant.
  */
 export interface MemoryStore {
 	count(): Promise<number>;
@@ -157,8 +155,6 @@ export interface MemoryStore {
 	putNode(node: MemoryNode): Promise<boolean>;
 	/** Number of nodes at `level`, which by invariant are the blocks `0 .. n-1` of that level. */
 	levelLength(level: number): Promise<number>;
-	/** Delete every node at `level` with `startId >= fromStartId`. Returns the number deleted. */
-	truncateLevel(level: number, fromStartId: number): Promise<number>;
 }
 
 export interface CreateMemoryOptions {

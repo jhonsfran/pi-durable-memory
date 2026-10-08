@@ -61,19 +61,6 @@ describe("memory Durable Object", () => {
 		]);
 	});
 
-	it("forget schedules a rebuild that restores the summaries", async () => {
-		const stub = stubFor("forget");
-		await noteMany(stub, 8);
-		await compacted(stub);
-		expect(await stub.forget({ startId: 0, endId: 1 })).toBe(7);
-		expect(await stub.zoom({ startId: 0, endId: 7 })).toEqual([
-			{ type: "pending", startId: 0, endId: 3 },
-			{ type: "pending", startId: 4, endId: 7 },
-		]);
-		await compacted(stub);
-		expect(await stub.zoom({ startId: 0, endId: 7 })).toEqual(summaries);
-	});
-
 	it("without a summarizer schedules no alarm and stores the summaries the client commits", async () => {
 		const stub = env.MEMORY_CLIENT.get(env.MEMORY_CLIENT.idFromName("client"));
 		await noteMany(stub, 4);

@@ -143,16 +143,15 @@ note #7      #0 #1 #2 #3 #4 #5 #6 #7      ← the log, never edited
 - **Log.** `memories(scope, id, created_at, content, source_id, supersedes)`. Ids are positions. Rows are never updated or deleted.
 - **Tree.** `memory_nodes(scope, level, start_id, end_id, summary)`. A node covers an aligned power-of-two block and is built the moment its block fills. Blocks of up to 16 memories are summarized from the raw lines; larger ones from their two children. Every node is one summarizer call, so compaction costs about one call per memory over the life of the log.
 - **Wake.** The cover is computed from the memory count alone, then at most 96 rows are read. At 100,000 memories that is three queries and 96 rows, measured in the tests. A block whose summary is not built yet shows as `#a-b (not summarized yet)` so the budget stays exact.
-- **Compaction.** Every `note` and `forget` sets an alarm. The handler builds up to `mergesPerAlarm` nodes (32) and reschedules while merges remain. Summarizer errors propagate so the platform retries with backoff.
+- **Compaction.** Every `note` sets an alarm. The handler builds up to `mergesPerAlarm` nodes (32) and reschedules while merges remain. Summarizer errors propagate so the platform retries with backoff.
 - **Summaries.** `buildSummaryPrompt(input)` asks for one line of at most 280 bytes that keeps standing facts with the id of the memory stating them and drops events. A summary of 8,192 memories is then a map with pointers, not a story.
 - **Search.** FTS5 inside Durable Object SQLite, with `LIKE` as a fallback.
-- **Forget.** `forget(range)` on the object drops one summary and every summary built from it; the next alarm rebuilds them. Raw memories are untouched. An operator tool, not a model tool.
 
 `defineMemoryObject` options: `summarizer(env)`, `limits` (`maxEntryBytes` 280, `rawThreshold` 16, `maxItems` 96), `mergesPerAlarm` (32).
 
 ## Invariants the tests hold
 
-- Raw memories are never modified by compaction, `forget`, or supersede.
+- Raw memories are never modified by compaction or supersede.
 - One `sourceId` never creates two memories.
 - Every summary covers an aligned block and derives from raw memories or its two children.
 - `wake()` never exceeds its budget and reads a bounded number of rows at 100,000 memories.

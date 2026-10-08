@@ -226,12 +226,5 @@ export async function createSqliteMemoryStore(db: SqlDatabase, options: { readon
 			const row = await db.get<{ last: number | null }>("SELECT MAX(start_id) AS last FROM memory_nodes WHERE scope = ? AND level = ?", scope, level);
 			return row?.last == null ? 0 : Math.floor(row.last / 2 ** level) + 1;
 		},
-
-		truncateLevel(level, fromStartId) {
-			return db.transaction(async (tx) => {
-				await tx.run("DELETE FROM memory_nodes WHERE scope = ? AND level = ? AND start_id >= ?", scope, level, fromStartId);
-				return changes(tx);
-			});
-		},
 	};
 }

@@ -194,23 +194,6 @@ describe("memory", () => {
 		await expect(memory.zoom({ startId: 1000, endId: 1001 })).rejects.toThrow(InvalidRange);
 	});
 
-	it("forgets a node and its ancestors, keeps the raw memories, and rebuilds the same summary", async () => {
-		const { memory, store } = await openFixture();
-		await noteMany(memory, 8);
-		await memory.compact();
-		const before = await store.getNodes([{ level: 1, startId: 2 }, { level: 2, startId: 0 }, { level: 3, startId: 0 }]);
-		expect(before.map((node) => node.summary)).toEqual(["[m2 m3]", "[m0 m1 m2 m3]", "[m0 m1 m2 m3 m4 m5 m6 m7]"]);
-		expect(await memory.forget({ startId: 2, endId: 3 })).toBe(6);
-		expect(await store.getNodes([{ level: 1, startId: 2 }, { level: 2, startId: 0 }, { level: 3, startId: 0 }])).toEqual([]);
-		expect((await store.getNodes([{ level: 1, startId: 0 }])).map((node) => node.summary)).toEqual(["[m0 m1]"]);
-		expect(await store.getMemories({ startId: 0, endId: 7 })).toHaveLength(8);
-		expect((await store.getMemories({ startId: 2, endId: 3 })).map((entry) => entry.content)).toEqual(["m2", "m3"]);
-		expect(await memory.pending()).toBe(6);
-		expect(await memory.compact()).toEqual({ merged: 6, pending: 0 });
-		const after = await store.getNodes([{ level: 1, startId: 2 }, { level: 2, startId: 0 }, { level: 3, startId: 0 }]);
-		expect(after).toEqual(before);
-	});
-
 	it("stops after maxMerges and reports what is still pending", async () => {
 		const { memory, store } = await openFixture();
 		await noteMany(memory, 8);
