@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Memory</title>
+<style>
+	:root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --code: #f5f5f4; --mono: ui-monospace, SFMono-Regular, Menlo, monospace; color-scheme: light dark; }
+	@media (prefers-color-scheme: dark) {
+		:root { --bg: #0c0a09; --fg: #e7e5e4; --muted: #a8a29e; --line: #292524; --code: #1c1917; }
+	}
+	body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, sans-serif; }
+	main { max-width: 48rem; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+	a { color: inherit; }
+	.home { font: 600 0.9rem var(--mono); text-decoration: none; color: var(--muted); }
+	h1, h2 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.75rem; }
+	.label { font-size: 0.85rem; font-weight: 500; color: var(--muted); margin: 1rem 0 0.35rem; }
+	p { margin: 0.5rem 0; color: var(--muted); }
+	button { font: 500 0.85rem system-ui, sans-serif; padding: 0.4rem 0.75rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); cursor: pointer; }
+	.copy { display: flex; gap: 0.5rem; align-items: start; }
+	.copy code { flex: 1; min-width: 0; font: 0.85rem/1.5 var(--mono); overflow-wrap: anywhere; padding: 0.4rem 0.6rem; background: var(--code); border: 1px solid var(--line); border-radius: 6px; }
+	.bar { display: flex; justify-content: space-between; align-items: center; margin: 2rem 0 0.75rem; }
+	.bar h2 { margin: 0; }
+	#count { font-weight: 400; color: var(--muted); margin-left: 0.5rem; }
+	ul { list-style: none; margin: 0; padding: 0; }
+	ul ul { margin-left: 0.4rem; padding-left: 1rem; border-left: 1px solid var(--line); }
+	.row { display: flex; gap: 0.6rem; align-items: baseline; padding: 0.3rem 0; font: 0.85rem/1.5 var(--mono); }
+	.row::before { content: ""; flex: none; width: 0.8rem; color: var(--muted); }
+	summary.row { cursor: pointer; list-style: none; }
+	summary.row::-webkit-details-marker { display: none; }
+	summary.row::before { content: "▸"; }
+	details[open] > summary.row::before { content: "▾"; }
+	.id, .count { flex: none; color: var(--muted); }
+	.text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+	.count { font-size: 0.75rem; }
+	.status { display: block; padding: 0.3rem 0; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+	<a class="home" href="/">memory over MCP</a>
+
+	<h1>Connect an agent</h1>
+	<div class="copy"><code id="url" class="url"></code><button type="button" data-copy="url">Copy</button></div>
+	<p>Anyone with this URL can read and write this memory.</p>
+	<div class="label">Claude Code</div>
+	<div class="copy"><code id="claude">claude mcp add --transport http memory <span class="url"></span></code><button type="button" data-copy="claude">Copy</button></div>
+	<div class="label">Codex</div>
+	<div class="copy"><code id="codex">codex mcp add memory --url <span class="url"></span></code><button type="button" data-copy="codex">Copy</button></div>
+	<p>Pi has no MCP support, but it can call this memory through <a href="https://github.com/steipete/mcporter">mcporter</a>.</p>
+
+	<div class="bar"><h2>Memories<span id="count"></span></h2><button id="refresh" type="button">Refresh</button></div>
+	<div id="tree"></div>
+</main>
+<script>
+	const tree = document.getElementById("tree");
+	const count = document.getElementById("count");
+
+	for (const element of document.querySelectorAll(".url")) element.textContent = location.origin + location.pathname;
+
+	for (const button of document.querySelectorAll("[data-copy]")) {
+		button.addEventListener("click", async () => {
+			await navigator.clipboard.writeText(document.getElementById(button.dataset.copy).textContent);
+			button.textContent = "Copied";
+			setTimeout(() => (button.textContent = "Copy"), 1500);
+		});
+	}
+
+	function span(className, text) {
+		const element = document.createElement("span");
+		element.className = className;
+		element.textContent = text;
+		return element;
+	}
+
+	const notes = (n) => (n === 1 ? "1 note" : n + " notes");
+
+	async function getJson(path) {
+		const response = await fetch(location.pathname + path);
+		if (!response.ok) throw new Error(await response.text());
+		return response.json();
+	}
+
+	function render(items) {
+		const list = document.createElement("ul");
+		for (const item of items) {
+			const li = document.createElement("li");
+			if (item.type === "memory") {
+				const row = document.createElement("div");
+				row.className = "row";
+				row.append(span("id", "#" + item.id), span("text", item.content));
+				li.append(row);
+			} else {
+				const details = document.createElement("details");
+				const summary = document.createElement("summary");
+				summary.className = "row";
+				summary.append(span("id", "#" + item.startId + "-" + item.endId), span("text", item.content), span("count", notes(item.endId - item.startId + 1)));
+				details.append(summary);
+				details.addEventListener("toggle", () => {
+					if (!details.open || details.childElementCount > 1) return;
+					const loading = span("status", "Loading…");
+					details.append(loading);
+					getJson("/zoom.json?startId=" + item.startId + "&endId=" + item.endId).then(
+						(children) => loading.replaceWith(render(children)),
+						(error) => (loading.textContent = error.message),
+					);
+				});
+				li.append(details);
+			}
+			list.append(li);
+		}
+		return list;
+	}
+
+	async function load() {
+		tree.replaceChildren(span("status", "Loading…"));
+		try {
+			const { items, total } = await getJson("/wake.json");
+			count.textContent = total === 0 ? "" : notes(total);
+			tree.replaceChildren(items.length === 0 ? span("status", "No memories yet. Connect an agent above and ask it to remember something.") : render(items));
+		} catch (error) {
+			tree.replaceChildren(span("status", error.message));
+		}
+	}
+
+	document.getElementById("refresh").addEventListener("click", load);
+	load();
+</script>
+</body>
+</html>

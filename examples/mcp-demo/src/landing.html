@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Memory over MCP</title>
+<style>
+	:root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #1c1917; --accent-fg: #fafaf9; color-scheme: light dark; }
+	@media (prefers-color-scheme: dark) {
+		:root { --bg: #0c0a09; --fg: #e7e5e4; --muted: #a8a29e; --line: #292524; --accent: #e7e5e4; --accent-fg: #0c0a09; }
+	}
+	body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, sans-serif; }
+	main { max-width: 40rem; margin: 0 auto; padding: 4rem 1rem; }
+	h1 { font: 600 1.25rem/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 1rem; }
+	p { color: var(--muted); margin: 0 0 2rem; }
+	button { font: 500 0.95rem system-ui, sans-serif; padding: 0.6rem 1rem; border: 0; border-radius: 6px; background: var(--accent); color: var(--accent-fg); cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+	<h1>memory over MCP</h1>
+	<p>Create a long-term memory and connect Claude Code or Codex to it over MCP. Your agent saves one-line notes, writes the summaries that fold old notes together, and reads the whole history back at the start of every session. The memory lives at a link nobody can guess. Anyone who has the link can read and write it.</p>
+	<button id="create" type="button">Create a memory</button>
+</main>
+<script>
+	document.getElementById("create").addEventListener("click", () => {
+		const bytes = crypto.getRandomValues(new Uint8Array(16));
+		const id = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+		location.href = "/m/" + id;
+	});
+</script>
+</body>
+</html>

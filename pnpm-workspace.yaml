@@ -1,4 +1,8 @@
+packages:
+  - "."
+  - "examples/*"
 allowBuilds:
+  core-js-pure: false
   esbuild: true
   "@google/genai": false
   protobufjs: false
