@@ -17,8 +17,8 @@ export interface MemoryObjectOptions<Env> {
 	readonly mergesPerAlarm?: number | undefined;
 }
 
-/** What a stub of the Durable Object exposes over RPC: the `Memory` interface. */
-export type MemoryObjectRpc = Memory & Rpc.DurableObjectBranded;
+/** What a stub of the Durable Object exposes over RPC: the `Memory` interface, and `destroy()` for the object itself. */
+export type MemoryObjectRpc = Memory & { destroy(): Promise<void> } & Rpc.DurableObjectBranded;
 
 export type MemoryObjectClass<Env> = typeof DurableObject<Env> & (new (ctx: DurableObjectState, env: Env) => MemoryObjectRpc);
 
@@ -111,6 +111,18 @@ export function defineMemoryObject<Env>(options: MemoryObjectOptions<Env>): Memo
 
 		async commitMerge(range: MemoryRange, summary: string) {
 			return (await this.open()).commitMerge(range, summary);
+		}
+
+		/**
+		 * Delete the whole scope: every memory, summary, the view and any alarm. With nothing stored,
+		 * the object ceases to exist once it shuts down; the next call under its name starts an empty
+		 * memory. `deleteAll()` keeps the alarm on compatibility dates before 2026-02-24, hence `deleteAlarm()`.
+		 */
+		async destroy(): Promise<void> {
+			this.memory = undefined;
+			this.loggedFailures.clear();
+			await this.ctx.storage.deleteAlarm();
+			await this.ctx.storage.deleteAll();
 		}
 	};
 }

@@ -61,6 +61,17 @@ describe("memory Durable Object", () => {
 		]);
 	});
 
+	it("destroy deletes every memory and the alarm, and the scope starts over at #0", async () => {
+		const stub = stubFor("destroy");
+		await noteMany(stub, 4);
+		await compacted(stub);
+		await runInDurableObject(stub, (_, state) => state.storage.setAlarm(Date.now() + 60_000));
+		await stub.destroy();
+		expect(await runInDurableObject(stub, (_, state) => state.storage.getAlarm())).toBeNull();
+		expect(await stub.wake()).toEqual({ total: 0, items: [] });
+		expect(await stub.note({ content: "fresh", createdAt: T0 })).toEqual({ id: 0, createdAt: T0, content: "fresh" });
+	});
+
 	it("without a summarizer schedules no alarm and stores the summaries the client commits", async () => {
 		const stub = env.MEMORY_CLIENT.get(env.MEMORY_CLIENT.idFromName("client"));
 		await noteMany(stub, 4);
