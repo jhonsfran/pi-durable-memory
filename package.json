@@ -1,6 +1,6 @@
 {
   "name": "pi-durable-memory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hierarchical long-term memory for Pi Durable agents on Cloudflare Durable Objects: one object per scope with an append-only log, a binary summary tree, bounded wake, full-text recall and zoom. Injected summarizer.",
   "type": "module",
   "license": "MIT",
