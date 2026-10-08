@@ -15,7 +15,8 @@ function scripted(replies: readonly string[]) {
 	return { summarizer, requests };
 }
 
-const step = (lines: string): string => `For scale, this line is exactly 10 bytes:\nUser wants\n\nMerge these two lines into one, in at most 16 bytes:\n${lines}`;
+const step = (lines: string): string =>
+	`Merge these two adjacent lines into one line of at most 16 bytes (about 2 words), the length of this ruler:\n----------------\n<memory> may hold their notes in more detail: take details of them from there too.\n<input>\n${lines}\n</input>`;
 
 describe("summarizer conversation", () => {
 	it("sends the bare view up to the block as context and the two lines as the step, with no id anywhere", async () => {
@@ -56,7 +57,7 @@ describe("summarizer conversation", () => {
 		expect(requests[1]?.turns).toEqual([
 			{ role: "user", blocks: ["<memory>\nprefers tabs\ndeploys on Fridays\n</memory>", step("prefers tabs\ndeploys on Fridays")] },
 			{ role: "assistant", text: "tabs on Friday é ok" },
-			{ role: "user", blocks: ["That line is 20 bytes; the limit is 16. It must end where it is cut here:\ntabs on Friday | ← LIMIT"] },
+			{ role: "user", blocks: ["Too long: your line is 20 bytes, over the 16-byte limit. Write the whole line again for the same <input>, cutting just enough of the least valuable items to fit before this cut:\ntabs on Friday | ← LIMIT"] },
 		]);
 		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "tabs, Fri deploy" }]);
 	});

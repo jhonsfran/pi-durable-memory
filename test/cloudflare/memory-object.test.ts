@@ -71,7 +71,7 @@ describe("memory Durable Object", () => {
 			endId: 1,
 			request: {
 				system: expect.any(String),
-				turns: [{ role: "user", blocks: ["<memory>\nm0\nm1\n</memory>", expect.stringMatching(/in at most 4 bytes:\nm0\nm1$/)] }],
+				turns: [{ role: "user", blocks: ["<memory>\nm0\nm1\n</memory>", expect.stringMatching(/at most 4 bytes[^]*\n<input>\nm0\nm1\n<\/input>$/)] }],
 			},
 		});
 		for (let job = await stub.nextMerge(); job !== undefined; job = await stub.nextMerge()) {

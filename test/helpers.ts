@@ -6,9 +6,9 @@ import { openNodeSqlite } from "./node-sqlite.js";
 
 export function mergedLines(request: SummaryRequest): string[] {
 	const [first] = request.turns;
-	const step = first?.role === "user" ? first.blocks[1] : undefined;
-	if (step === undefined) throw new Error("the request has no step");
-	return step.split("\n").slice(-2);
+	const [, a, b] = (first?.role === "user" ? /\n<input>\n(.*)\n(.*)\n<\/input>$/.exec(first.blocks[1] ?? "") : null) ?? [];
+	if (a === undefined || b === undefined) throw new Error("the step has no <input> holding two lines");
+	return [a, b];
 }
 
 export const joinSummarizer: MemorySummarizer = {

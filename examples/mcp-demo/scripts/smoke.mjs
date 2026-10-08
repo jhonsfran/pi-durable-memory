@@ -55,10 +55,9 @@ for (;;) {
 	const prompt = await ok("memory_pending");
 	if (prompt === "Nothing to summarize.") break;
 	const [, startId, endId] = /^Call memory_commit with startId (\d+), endId (\d+), and your line as summary\.$/m.exec(prompt).map(Number);
-	const [heading, left, right, ...rest] = prompt.split("\n\n").at(-2).split("\n");
-	assert.match(heading, /^Merge these two lines into one, in at most 512 bytes:$/);
-	assert.equal(rest.length, 0);
 	assert.match(prompt, /^You write the long-term memory of an AI agent\./);
+	assert.match(prompt, /^Merge these two adjacent lines into one line of at most 512 bytes \(about 70 words\), the length of this ruler:\n-{512}\n/m);
+	const [, left, right] = /^<input>\n(.+)\n(.+)\n<\/input>$/m.exec(prompt);
 	const summary = `${firstWords(left)} / ${firstWords(right)}`;
 	if (lines.size === 0) {
 		assert.equal(await refused("memory_commit", { startId, endId, summary: " " }), "A memory is one line of text; this one is empty");
