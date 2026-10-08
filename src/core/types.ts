@@ -126,7 +126,7 @@ export interface Memory {
 	 * is the same two steps with the injected summarizer in between.
 	 */
 	nextMerge(): Promise<SummarizeInput | undefined>;
-	/** Store the summary for a block `nextMerge()` returned. False when that block is no longer pending. The summary is normalized and truncated like a note. */
+	/** Store the summary for a block `nextMerge()` returned. False when the block is built already or is not the next one at its level. The summary is normalized and truncated like a note. */
 	commitMerge(range: MemoryRange, summary: string): Promise<boolean>;
 }
 
@@ -151,8 +151,11 @@ export interface MemoryStore {
 	/** Full-text matches: every word, newest first, for `all`; at least one word, best match first, for `any`. Superseded memories are included; the core filters. */
 	searchMemories(query: string, limit: number, match: RecallMatch): Promise<MemoryEntry[]>;
 	getNodes(keys: ReadonlyArray<{ readonly level: number; readonly startId: number }>): Promise<MemoryNode[]>;
-	/** False when a node with the same `(level, startId)` already exists; the existing node is kept. */
-	putNode(node: MemoryNode): Promise<boolean>;
+	/**
+	 * Store `node` only when it is the next block at its level and both its children exist (the two
+	 * memories, or the two nodes one level down), in one transaction. False, writing nothing, otherwise.
+	 */
+	appendNode(node: MemoryNode): Promise<boolean>;
 	/** Number of nodes at `level`, which by invariant are the blocks `0 .. n-1` of that level. */
 	levelLength(level: number): Promise<number>;
 }

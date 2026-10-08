@@ -289,6 +289,25 @@ describe("memory", () => {
 		await expect(memory.commitMerge({ startId: 1, endId: 2 }, "x")).rejects.toThrow(InvalidRange);
 	});
 
+	it("refuses a commit for a block that is not next at its level, so the blocks before it stay buildable", async () => {
+		const { memory, store } = await openFixture({ summarizer: null });
+		await noteMany(memory, 6);
+		expect(await memory.commitMerge({ startId: 4, endId: 5 }, "third pair")).toBe(false);
+		expect(await memory.commitMerge({ startId: 0, endId: 3 }, "first four")).toBe(false);
+		expect(await memory.pending()).toBe(4);
+		expect(await memory.commitMerge({ startId: 0, endId: 1 }, "first pair")).toBe(true);
+		expect(await memory.commitMerge({ startId: 2, endId: 3 }, "second pair")).toBe(true);
+		expect(await memory.commitMerge({ startId: 4, endId: 5 }, "third pair")).toBe(true);
+		expect(await memory.commitMerge({ startId: 0, endId: 3 }, "first four")).toBe(true);
+		expect(await memory.pending()).toBe(0);
+		expect(await store.getNodes([{ level: 1, startId: 0 }, { level: 1, startId: 2 }, { level: 1, startId: 4 }, { level: 2, startId: 0 }])).toEqual([
+			{ level: 1, startId: 0, endId: 1, summary: "first pair" },
+			{ level: 1, startId: 2, endId: 3, summary: "second pair" },
+			{ level: 1, startId: 4, endId: 5, summary: "third pair" },
+			{ level: 2, startId: 0, endId: 3, summary: "first four" },
+		]);
+	});
+
 	it("without a summarizer compact merges nothing and manual commits fill the pending blocks", async () => {
 		const { memory } = await openFixture({ summarizer: null });
 		await noteMany(memory, 4);

@@ -78,11 +78,22 @@ describe("sqlite store", () => {
 		]);
 	});
 
-	it("keeps the first node when putNode sees the same key twice", async () => {
+	it("appends a node only when it is next at its level and its children exist", async () => {
 		const { store } = await openFixture();
-		expect(await store.putNode({ level: 1, startId: 0, endId: 1, summary: "first" })).toBe(true);
-		expect(await store.putNode({ level: 1, startId: 0, endId: 1, summary: "second" })).toBe(false);
-		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "first" }]);
+		await store.appendMemory({ content: "m0", createdAt: 0 });
+		expect(await store.appendNode({ level: 1, startId: 0, endId: 1, summary: "too early" })).toBe(false);
+		for (let id = 1; id < 4; id++) await store.appendMemory({ content: `m${id}`, createdAt: id });
+		expect(await store.appendNode({ level: 2, startId: 0, endId: 3, summary: "no children" })).toBe(false);
+		expect(await store.appendNode({ level: 1, startId: 2, endId: 3, summary: "out of order" })).toBe(false);
+		expect(await store.appendNode({ level: 1, startId: 0, endId: 1, summary: "first" })).toBe(true);
+		expect(await store.appendNode({ level: 1, startId: 0, endId: 1, summary: "second" })).toBe(false);
+		expect(await store.appendNode({ level: 1, startId: 2, endId: 3, summary: "next" })).toBe(true);
+		expect(await store.appendNode({ level: 2, startId: 0, endId: 3, summary: "both" })).toBe(true);
+		expect(await store.getNodes([{ level: 1, startId: 0 }, { level: 1, startId: 2 }, { level: 2, startId: 0 }])).toEqual([
+			{ level: 1, startId: 0, endId: 1, summary: "first" },
+			{ level: 1, startId: 2, endId: 3, summary: "next" },
+			{ level: 2, startId: 0, endId: 3, summary: "both" },
+		]);
 	});
 
 	describe.each([

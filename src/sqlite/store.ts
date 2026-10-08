@@ -34,7 +34,6 @@ const FTS_SCHEMA = "CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(c
 const MEMORY_COLUMNS = "m.id, m.created_at, m.content, m.source_id, m.supersedes, MIN(n.id) AS superseded_by";
 const SUPERSEDED_JOIN = "LEFT JOIN memories n ON n.scope = m.scope AND n.supersedes = m.id";
 const MEMORY_FROM = `memories m ${SUPERSEDED_JOIN}`;
-const NEXT_ID = "SELECT COALESCE(MAX(id) + 1, 0) AS id FROM memories WHERE scope = ?";
 
 /** Durable Object SQL allows 100 bound parameters per statement; 48 keys plus the scope stay under it. */
 const NODE_KEYS_PER_QUERY = 48;
@@ -88,9 +87,15 @@ async function detectSearchMode(db: SqlDatabase): Promise<SearchMode> {
 	}
 }
 
-async function changes(tx: SqlExecutor): Promise<number> {
-	const row = await tx.get<{ n: number }>("SELECT changes() AS n");
-	return row?.n ?? 0;
+async function countOf(sql: SqlExecutor, scope: string): Promise<number> {
+	const row = await sql.get<{ id: number }>("SELECT COALESCE(MAX(id) + 1, 0) AS id FROM memories WHERE scope = ?", scope);
+	return row?.id ?? 0;
+}
+
+async function levelLengthOf(sql: SqlExecutor, scope: string, level: number): Promise<number> {
+	// Durable Object SQL binds numbers as doubles, so the division stays in JavaScript.
+	const row = await sql.get<{ last: number | null }>("SELECT MAX(start_id) AS last FROM memory_nodes WHERE scope = ? AND level = ?", scope, level);
+	return row?.last == null ? 0 : Math.floor(row.last / 2 ** level) + 1;
 }
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
@@ -142,10 +147,7 @@ export async function createSqliteMemoryStore(db: SqlDatabase, options: { readon
 	};
 
 	return {
-		async count() {
-			const row = await db.get<{ id: number }>(NEXT_ID, scope);
-			return row?.id ?? 0;
-		},
+		count: () => countOf(db, scope),
 
 		appendMemory(input) {
 			return db.transaction(async (tx) => {
@@ -153,8 +155,7 @@ export async function createSqliteMemoryStore(db: SqlDatabase, options: { readon
 					const existing = await tx.get<MemoryRow>(`SELECT ${MEMORY_COLUMNS} FROM ${MEMORY_FROM} WHERE m.scope = ? AND m.source_id = ? GROUP BY m.id`, scope, input.sourceId);
 					if (existing !== undefined) return toEntry(existing);
 				}
-				const next = await tx.get<{ id: number }>(NEXT_ID, scope);
-				const id = next?.id ?? 0;
+				const id = await countOf(tx, scope);
 				await tx.run(
 					"INSERT INTO memories (scope, id, created_at, content, source_id, supersedes) VALUES (?, ?, ?, ?, ?, ?)",
 					scope,
@@ -207,24 +208,24 @@ export async function createSqliteMemoryStore(db: SqlDatabase, options: { readon
 			return found;
 		},
 
-		putNode(node) {
+		appendNode(node) {
 			return db.transaction(async (tx) => {
+				const size = 2 ** node.level;
+				const next = (await levelLengthOf(tx, scope, node.level)) * size;
+				const covered = node.level === 1 ? await countOf(tx, scope) : (await levelLengthOf(tx, scope, node.level - 1)) * (size / 2);
+				if (node.startId !== next || node.endId >= covered) return false;
 				await tx.run(
-					"INSERT OR IGNORE INTO memory_nodes (scope, level, start_id, end_id, summary) VALUES (?, ?, ?, ?, ?)",
+					"INSERT INTO memory_nodes (scope, level, start_id, end_id, summary) VALUES (?, ?, ?, ?, ?)",
 					scope,
 					node.level,
 					node.startId,
 					node.endId,
 					node.summary,
 				);
-				return (await changes(tx)) === 1;
+				return true;
 			});
 		},
 
-		async levelLength(level) {
-			// Durable Object SQL binds numbers as doubles, so the division stays in JavaScript.
-			const row = await db.get<{ last: number | null }>("SELECT MAX(start_id) AS last FROM memory_nodes WHERE scope = ? AND level = ?", scope, level);
-			return row?.last == null ? 0 : Math.floor(row.last / 2 ** level) + 1;
-		},
+		levelLength: (level) => levelLengthOf(db, scope, level),
 	};
 }

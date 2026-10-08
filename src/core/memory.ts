@@ -114,7 +114,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 	 * `nextMerge()` plus the number of blocks it settled on its own. A block whose every memory was
 	 * superseded is stored with the fixed summary here instead of being returned: it needs no model,
 	 * and a caller should never see an empty block. `budget` caps those so `compact()` honors
-	 * `maxMerges`. A lost `putNode` race is left for the next read of the cursor to see.
+	 * `maxMerges`. A lost `appendNode` race is left for the next read of the cursor to see.
 	 */
 	async function nextPending(budget: number): Promise<{ input: SummarizeInput | undefined; fixed: number }> {
 		const total = await store.count();
@@ -129,7 +129,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 			if (key === lost) break;
 			const items = await summarizeInputs(level, block);
 			if (items.length > 0) return { input: { ...block, items, maxBytes: maxEntryBytes }, fixed };
-			if (await store.putNode({ level, ...block, summary: SUPERSEDED_BLOCK_SUMMARY })) fixed++;
+			if (await store.appendNode({ level, ...block, summary: SUPERSEDED_BLOCK_SUMMARY })) fixed++;
 			else lost = key;
 		}
 		return { input: undefined, fixed };
@@ -137,7 +137,7 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 
 	async function commitMerge(range: MemoryRange, summary: string): Promise<boolean> {
 		assertBlock(range);
-		return store.putNode({ level: blockLevel(range), startId: range.startId, endId: range.endId, summary: truncateUtf8(normalizeEntry(summary), maxEntryBytes) });
+		return store.appendNode({ level: blockLevel(range), startId: range.startId, endId: range.endId, summary: truncateUtf8(normalizeEntry(summary), maxEntryBytes) });
 	}
 
 	return {
