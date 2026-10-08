@@ -17,8 +17,8 @@ async function compacted(memory: Memory): Promise<void> {
 }
 
 const summaries = [
-	{ type: "summary", startId: 0, endId: 3, content: "[m0 m1 m2 m3]" },
-	{ type: "summary", startId: 4, endId: 7, content: "[m4 m5 m6 m7]" },
+	{ type: "summary", startId: 0, endId: 3, content: "m0 / m1 / m2 / m3" },
+	{ type: "summary", startId: 4, endId: 7, content: "m4 / m5 / m6 / m7" },
 ];
 
 describe("memory Durable Object", () => {
@@ -73,15 +73,15 @@ describe("memory Durable Object", () => {
 				{ startId: 0, endId: 0, content: "m0" },
 				{ startId: 1, endId: 1, content: "m1" },
 			],
-			maxBytes: 280,
+			maxBytes: 4,
 		});
 		for (let input = await stub.nextMerge(); input !== undefined; input = await stub.nextMerge()) {
-			expect(await stub.commitMerge(input, `client ${input.startId}-${input.endId}`)).toBe(true);
+			expect(await stub.commitMerge(input, `c${input.startId}${input.endId}`)).toBe(true);
 		}
 		expect(await stub.pending()).toBe(0);
 		expect((await stub.wake({ maxItems: 2 })).items).toEqual([
-			{ type: "summary", startId: 0, endId: 1, content: "client 0-1" },
-			{ type: "summary", startId: 2, endId: 3, content: "client 2-3" },
+			{ type: "summary", startId: 0, endId: 1, content: "c01" },
+			{ type: "summary", startId: 2, endId: 3, content: "c23" },
 		]);
 	});
 });

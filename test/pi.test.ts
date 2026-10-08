@@ -130,7 +130,7 @@ describe("pi extension", () => {
 		]);
 		expect(await toolResults(root)).toEqual([
 			{ text: "#7 fact seven", isError: false },
-			{ text: "#0-3 [fact zero fact one fact two fact three]\n#4-7 [fact four fact five fact six fact seven]", isError: false },
+			{ text: "#0-3 fact zero / fact one / fact two / fact three\n#4-7 fact four / fact five / fact six / fact seven", isError: false },
 			{ text: "#1-2 is not a block: use an aligned power-of-two range of at least 2 memories, like #16-31", isError: true },
 		]);
 		await harness.close(context);

@@ -2,10 +2,8 @@ import { blockAt, blockLevel, blockSize, childrenOf, cover, isAlignedBlock, labe
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong } from "./errors.js";
 import type { CreateMemoryOptions, Memory, MemoryEntry, MemoryItem, MemoryLimits, MemoryNode, MemoryRange, SummarizeInput } from "./types.js";
 
-const DEFAULT_LIMITS: MemoryLimits = { maxEntryBytes: 280, rawThreshold: 16, maxItems: 96 };
+const DEFAULT_LIMITS: MemoryLimits = { maxEntryBytes: 280, summaryBytes: 512, maxItems: 96 };
 const DEFAULT_RECALL_LIMIT = 10;
-/** Stored as the summary of a block whose every memory was superseded, so the summarizer never sees an empty block. */
-const SUPERSEDED_BLOCK_SUMMARY = "(every memory in this block was superseded)";
 
 const encoder = new TextEncoder();
 
@@ -49,7 +47,7 @@ function contiguousRuns(blocks: readonly MemoryRange[]): MemoryRange[] {
 }
 
 export function createMemory({ store, summarizer, limits }: CreateMemoryOptions): Memory {
-	const { maxEntryBytes, rawThreshold, maxItems } = { ...DEFAULT_LIMITS, ...limits };
+	const { maxEntryBytes, summaryBytes, maxItems } = { ...DEFAULT_LIMITS, ...limits };
 
 	/** Each block rendered as `wake()` shows it, in the given order, with one read per kind. */
 	async function render(blocks: readonly MemoryRange[]): Promise<MemoryItem[]> {
@@ -76,10 +74,11 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 		});
 	}
 
-	async function summarizeInputs(level: number, block: MemoryRange): Promise<SummarizeInput["items"]> {
-		if (blockSize(block) <= rawThreshold) {
+	/** The two children of a block, oldest first: two memories at level 1, two nodes one level down above it. A superseded memory reads as "". */
+	async function children(level: number, block: MemoryRange): Promise<SummarizeInput["items"]> {
+		if (level === 1) {
 			const entries = await store.getMemories(block);
-			return entries.filter(live).map((entry) => ({ startId: entry.id, endId: entry.id, content: entry.content }));
+			return entries.map((entry) => ({ startId: entry.id, endId: entry.id, content: live(entry) ? entry.content : "" }));
 		}
 		const halves = childrenOf(block);
 		const nodes = await store.getNodes(halves.map((half) => ({ level: level - 1, startId: half.startId })));
@@ -90,6 +89,13 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 			}
 			return { startId: half.startId, endId: half.endId, content: node.summary };
 		});
+	}
+
+	/** The node text when no model is needed: the non-empty children joined, if that fits `summaryBytes` or at most one is non-empty. */
+	function freeMerge(items: SummarizeInput["items"]): string | undefined {
+		const texts = items.map((item) => item.content).filter((text) => text.length > 0);
+		const joined = texts.join(" / ");
+		return texts.length < 2 || byteLength(joined) <= summaryBytes ? joined : undefined;
 	}
 
 	async function pendingCount(total: number): Promise<number> {
@@ -111,33 +117,33 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 	}
 
 	/**
-	 * `nextMerge()` plus the number of blocks it settled on its own. A block whose every memory was
-	 * superseded is stored with the fixed summary here instead of being returned: it needs no model,
-	 * and a caller should never see an empty block. `budget` caps those so `compact()` honors
+	 * `nextMerge()` plus the number of free merges it stored on the way: a block that needs no model
+	 * is stored here instead of being returned. `budget` caps those so `compact()` honors
 	 * `maxMerges`. A lost `appendNode` race is left for the next read of the cursor to see.
 	 */
-	async function nextPending(budget: number): Promise<{ input: SummarizeInput | undefined; fixed: number }> {
+	async function nextPending(budget: number): Promise<{ input: SummarizeInput | undefined; free: number }> {
 		const total = await store.count();
-		let fixed = 0;
+		let free = 0;
 		let lost: string | undefined;
-		while (fixed < budget) {
+		while (free < budget) {
 			const block = await nextPendingBlock(total);
 			if (block === undefined) break;
 			const level = blockLevel(block);
 			const key = nodeKey(level, block.startId);
 			// A lost race leaves the node present, so the cursor moves on. If it did not, the store broke its contract; stop rather than spin.
 			if (key === lost) break;
-			const items = await summarizeInputs(level, block);
-			if (items.length > 0) return { input: { ...block, items, maxBytes: maxEntryBytes }, fixed };
-			if (await store.appendNode({ level, ...block, summary: SUPERSEDED_BLOCK_SUMMARY })) fixed++;
+			const items = await children(level, block);
+			const summary = freeMerge(items);
+			if (summary === undefined) return { input: { ...block, items, maxBytes: summaryBytes }, free };
+			if (await store.appendNode({ level, ...block, summary })) free++;
 			else lost = key;
 		}
-		return { input: undefined, fixed };
+		return { input: undefined, free };
 	}
 
 	async function commitMerge(range: MemoryRange, summary: string): Promise<boolean> {
 		assertBlock(range);
-		return store.appendNode({ level: blockLevel(range), startId: range.startId, endId: range.endId, summary: truncateUtf8(normalizeEntry(summary), maxEntryBytes) });
+		return store.appendNode({ level: blockLevel(range), startId: range.startId, endId: range.endId, summary: truncateUtf8(normalizeEntry(summary), summaryBytes) });
 	}
 
 	return {
@@ -178,10 +184,10 @@ export function createMemory({ store, summarizer, limits }: CreateMemoryOptions)
 			const maxMerges = options?.maxMerges ?? Number.POSITIVE_INFINITY;
 			let merged = 0;
 			let lost: string | undefined;
-			while (summarizer !== undefined && merged < maxMerges) {
-				const { input, fixed } = await nextPending(maxMerges - merged);
-				merged += fixed;
-				if (input === undefined || merged >= maxMerges) break;
+			while (merged < maxMerges) {
+				const { input, free } = await nextPending(maxMerges - merged);
+				merged += free;
+				if (input === undefined || summarizer === undefined || merged >= maxMerges) break;
 				const key = nodeKey(blockLevel(input), input.startId);
 				// Same guard as `nextPending`: a lost commit must have left the node present, or the store broke its contract.
 				if (key === lost) break;

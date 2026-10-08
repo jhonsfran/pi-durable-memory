@@ -1,33 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { InvalidRange, MemoryEntryEmpty, MemoryEntryTooLong, formatMemoryContext } from "../src/index.js";
-import type { MemoryItem, MemoryNode, MemoryRange, MemoryStore } from "../src/index.js";
-import { constantSummarizer, joinSummarizer, noteMany, openFixture, seedMemoriesBySql } from "./helpers.js";
+import type { MemoryItem, MemoryRange, MemoryStore, MemorySummarizer, SummarizeInput } from "../src/index.js";
+import { constantSummarizer, noteMany, openFixture, refusingSummarizer, seedMemoriesBySql } from "./helpers.js";
 
-const size = (range: MemoryRange): number => range.endId - range.startId + 1;
-
-/** What `joinSummarizer` must have produced for a node, from the store's own view of its children. */
-async function expectedSummary(store: MemoryStore, node: MemoryNode): Promise<string> {
-	if (size(node) <= 16) {
-		const entries = await store.getMemories(node);
-		return `[${entries.map((entry) => entry.content).join(" ")}]`;
-	}
-	const half = size(node) / 2;
-	const children = await store.getNodes([
-		{ level: node.level - 1, startId: node.startId },
-		{ level: node.level - 1, startId: node.startId + half },
-	]);
-	const left = children.find((child) => child.startId === node.startId)!;
-	const right = children.find((child) => child.startId === node.startId + half)!;
-	return `[${left.summary} ${right.summary}]`;
-}
-
-async function allNodes(store: MemoryStore, total: number): Promise<MemoryNode[]> {
-	const keys: { level: number; startId: number }[] = [];
-	for (let level = 1; 2 ** level <= total; level++) {
-		for (let k = 0; k < Math.floor(total / 2 ** level); k++) keys.push({ level, startId: k * 2 ** level });
-	}
-	return store.getNodes(keys);
-}
+/** The memories `start..end` as a free merge writes them. */
+const joined = (start: number, end: number): string => Array.from({ length: end - start + 1 }, (_, i) => `m${start + i}`).join(" / ");
 
 describe("memory", () => {
 	it("notes with sourceIds, compacts, wakes with both memories and recalls the second", async () => {
@@ -66,21 +43,28 @@ describe("memory", () => {
 		expect((await memory.note({ content: "  first line \n\n   second line\r\n", createdAt: 2 })).content).toBe("first line second line");
 	});
 
-	it("builds every node from its raw memories up to 16 and from its two children above", async () => {
-		const { memory, store } = await openFixture({ limits: { maxEntryBytes: 8192 } });
-		await noteMany(memory, 1000);
-		expect(await memory.compact()).toEqual({ merged: 994, pending: 0 });
-		const nodes = await allNodes(store, 1000);
-		expect(nodes.length).toBe(994);
-		const byKey = new Map(nodes.map((node) => [`${node.level}:${node.startId}`, node.summary]));
-		expect(byKey.get("1:0")).toBe("[m0 m1]");
-		expect(byKey.get("4:16")).toBe("[m16 m17 m18 m19 m20 m21 m22 m23 m24 m25 m26 m27 m28 m29 m30 m31]");
-		expect(byKey.get("5:0")).toBe(`[${byKey.get("4:0")} ${byKey.get("4:16")}]`);
-		for (const node of nodes) {
-			expect(node.startId % size(node)).toBe(0);
-			expect(size(node)).toBe(2 ** node.level);
-			expect(node.summary).toBe(await expectedSummary(store, node));
-		}
+	it("builds every node from its two children, joining them without a model while they fit", async () => {
+		const inputs: SummarizeInput[] = [];
+		const summarizer: MemorySummarizer = {
+			async summarize(input) {
+				inputs.push(input);
+				return `s${input.startId}-${input.endId}`;
+			},
+		};
+		const { memory, store } = await openFixture({ summarizer, limits: { summaryBytes: 21 } });
+		await noteMany(memory, 16);
+		expect(await memory.compact()).toEqual({ merged: 15, pending: 0 });
+		expect(inputs).toEqual([
+			{ startId: 0, endId: 7, maxBytes: 21, items: [{ startId: 0, endId: 3, content: "m0 / m1 / m2 / m3" }, { startId: 4, endId: 7, content: "m4 / m5 / m6 / m7" }] },
+			{ startId: 8, endId: 15, maxBytes: 21, items: [{ startId: 8, endId: 11, content: "m8 / m9 / m10 / m11" }, { startId: 12, endId: 15, content: "m12 / m13 / m14 / m15" }] },
+		]);
+		const keys = [1, 2, 3, 4].flatMap((level) => Array.from({ length: 16 / 2 ** level }, (_, k) => ({ level, startId: k * 2 ** level })));
+		expect((await store.getNodes(keys)).map((node) => node.summary)).toEqual([
+			"m0 / m1", "m2 / m3", "m4 / m5", "m6 / m7", "m8 / m9", "m10 / m11", "m12 / m13", "m14 / m15",
+			"m0 / m1 / m2 / m3", "m4 / m5 / m6 / m7", "m8 / m9 / m10 / m11", "m12 / m13 / m14 / m15",
+			"s0-7", "s8-15",
+			"s0-7 / s8-15",
+		]);
 	});
 
 	it("wakes with at most 96 items that tile the whole log and end on the newest memory", async () => {
@@ -90,7 +74,7 @@ describe("memory", () => {
 		const { items, total } = await memory.wake();
 		expect(total).toBe(1000);
 		expect(items.length).toBe(96);
-		expect(items[0]).toEqual({ type: "summary", startId: 0, endId: 63, content: expect.stringMatching(/^\[\[\[.*m63\]\]\]$/) });
+		expect(items[0]).toEqual({ type: "summary", startId: 0, endId: 63, content: joined(0, 63) });
 		expect(items[items.length - 1]).toEqual({ type: "memory", id: 999, createdAt: 1_700_000_000_999, content: "m999" });
 		let next = 0;
 		for (const item of items) {
@@ -129,7 +113,7 @@ describe("memory", () => {
 		console.log(`100k: seed+compact ${Math.round(seeded - started)}ms, wake ${Math.round(woke - seeded)}ms`);
 		expect(total).toBe(100_000);
 		expect(items.length).toBe(96);
-		expect(items[0]).toEqual({ type: "summary", startId: 0, endId: 8191, content: "x" });
+		expect(items[0]).toEqual({ type: "summary", startId: 0, endId: 8191, content: Array(64).fill("x").join(" / ") });
 		expect(items[95]).toEqual({ type: "memory", id: 99_999, createdAt: 99_999, content: "m99999" });
 		expect(calls).toEqual({ count: 1, getMemories: 1, getNodes: 1 });
 		expect(rows).toBeLessThanOrEqual(96);
@@ -153,17 +137,17 @@ describe("memory", () => {
 		const after = await memory.wake();
 		expect(after.items.length).toBe(96);
 		expect(after.items.slice(0, 5)).toEqual([
-			{ type: "summary", startId: 0, endId: 1, content: "[m0 m1]" },
-			{ type: "summary", startId: 2, endId: 3, content: "[m2 m3]" },
-			{ type: "summary", startId: 4, endId: 5, content: "[m4 m5]" },
-			{ type: "summary", startId: 6, endId: 7, content: "[m6 m7]" },
+			{ type: "summary", startId: 0, endId: 1, content: "m0 / m1" },
+			{ type: "summary", startId: 2, endId: 3, content: "m2 / m3" },
+			{ type: "summary", startId: 4, endId: 5, content: "m4 / m5" },
+			{ type: "summary", startId: 6, endId: 7, content: "m6 / m7" },
 			{ type: "memory", id: 8, createdAt: 1_700_000_000_008, content: "m8" },
 		]);
 		expect(after.items.filter((item) => item.type === "pending")).toEqual([]);
 	});
 
 	it("zooms from the root block down to memory 0 and rejects ranges that are not blocks", async () => {
-		const { memory } = await openFixture({ limits: { maxEntryBytes: 8192 } });
+		const { memory } = await openFixture({ limits: { summaryBytes: 8192 } });
 		await noteMany(memory, 1000);
 		await memory.compact();
 		const root = await memory.zoom({ startId: 0, endId: 511 });
@@ -183,9 +167,9 @@ describe("memory", () => {
 			{ type: "memory", id: 998, createdAt: 1_700_000_000_998, content: "m998" },
 			{ type: "memory", id: 999, createdAt: 1_700_000_000_999, content: "m999" },
 		]);
-		expect(await memory.zoom({ startId: 992, endId: 1007 })).toEqual([{ type: "summary", startId: 992, endId: 999, content: "[m992 m993 m994 m995 m996 m997 m998 m999]" }]);
+		expect(await memory.zoom({ startId: 992, endId: 1007 })).toEqual([{ type: "summary", startId: 992, endId: 999, content: joined(992, 999) }]);
 		expect(await memory.zoom({ startId: 512, endId: 1023 })).toEqual([
-			{ type: "summary", startId: 512, endId: 767, content: expect.stringMatching(/^\[\[.*\]\]$/) },
+			{ type: "summary", startId: 512, endId: 767, content: joined(512, 767) },
 			{ type: "pending", startId: 768, endId: 1023 },
 		]);
 		await expect(memory.zoom({ startId: 1, endId: 2 })).rejects.toThrow(InvalidRange);
@@ -199,7 +183,7 @@ describe("memory", () => {
 		await noteMany(memory, 8);
 		expect(await memory.pending()).toBe(7);
 		expect(await memory.compact({ maxMerges: 1 })).toEqual({ merged: 1, pending: 6 });
-		expect(await store.getNodes([{ level: 1, startId: 0 }, { level: 1, startId: 2 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "[m0 m1]" }]);
+		expect(await store.getNodes([{ level: 1, startId: 0 }, { level: 1, startId: 2 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "m0 / m1" }]);
 		expect(await memory.compact({ maxMerges: 3 })).toEqual({ merged: 3, pending: 3 });
 		expect(await memory.compact()).toEqual({ merged: 3, pending: 0 });
 	});
@@ -215,40 +199,42 @@ describe("memory", () => {
 			{ id: 1, createdAt: 2, content: "prefers detail", supersedes: 0 },
 		]);
 		expect(await memory.compact()).toEqual({ merged: 1, pending: 0 });
-		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "[prefers detail]" }]);
+		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "prefers detail" }]);
 		expect(await memory.zoom({ startId: 0, endId: 1 })).toEqual([{ type: "memory", id: 1, createdAt: 2, content: "prefers detail" }]);
 		expect(await memory.recall("prefers")).toEqual([{ id: 1, createdAt: 2, content: "prefers detail", supersedes: 0 }]);
 		await expect(memory.note({ content: "prefers tables", supersedes: 7 })).rejects.toThrow(new InvalidRange("#7 is not in the memory: it holds 2 memories"));
 		expect(await store.count()).toBe(2);
 	});
 
-	it("summarizes a block whose every memory was superseded with a fixed line instead of calling the summarizer", async () => {
-		const { memory, store } = await openFixture({
-			summarizer: { async summarize({ items }) { if (items.length === 0) throw new Error("summarizer called with no items"); return joinSummarizer.summarize({ startId: 0, endId: 0, items, maxBytes: 280 }); } },
-		});
+	it("stores an empty summary for a block whose every memory was superseded, without the summarizer", async () => {
+		const { memory, store } = await openFixture({ summarizer: refusingSummarizer });
 		await memory.note({ content: "prefers brevity", createdAt: 1 });
 		await memory.note({ content: "prefers detail", supersedes: 0, createdAt: 2 });
 		await memory.note({ content: "prefers tables", supersedes: 1, createdAt: 3 });
-		expect(await memory.compact()).toEqual({ merged: 1, pending: 0 });
-		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([
-			{ level: 1, startId: 0, endId: 1, summary: "(every memory in this block was superseded)" },
+		await memory.note({ content: "prefers lists", createdAt: 4 });
+		expect(await memory.compact()).toEqual({ merged: 3, pending: 0 });
+		expect(await store.getNodes([{ level: 1, startId: 0 }, { level: 1, startId: 2 }, { level: 2, startId: 0 }])).toEqual([
+			{ level: 1, startId: 0, endId: 1, summary: "" },
+			{ level: 1, startId: 2, endId: 3, summary: "prefers tables / prefers lists" },
+			{ level: 2, startId: 0, endId: 3, summary: "prefers tables / prefers lists" },
 		]);
-		expect(formatMemoryContext(await memory.wake({ maxItems: 2 }))).toBe("#0-1 (every memory in this block was superseded)\n#2 prefers tables");
 	});
 
 	it("normalizes and truncates summaries on a character boundary", async () => {
 		const { memory, store } = await openFixture({
-			summarizer: { async summarize() { return `  line one\n line two ${"é".repeat(200)}`; } },
+			summarizer: { async summarize() { return `  line one\n line two ${"é".repeat(40)}`; } },
+			limits: { summaryBytes: 64 },
 		});
-		await noteMany(memory, 2);
+		await memory.note({ content: "a".repeat(40), createdAt: 0 });
+		await memory.note({ content: "b".repeat(40), createdAt: 1 });
 		await memory.compact();
 		const [node] = await store.getNodes([{ level: 1, startId: 0 }]);
-		expect(node?.summary).toBe(`line one line two ${"é".repeat(131)}`);
-		expect(new TextEncoder().encode(node!.summary).length).toBe(280);
+		expect(node?.summary).toBe(`line one line two ${"é".repeat(23)}`);
+		expect(new TextEncoder().encode(node!.summary).length).toBe(64);
 	});
 
-	it("hands out pending blocks in build order through nextMerge and stores what commitMerge is given", async () => {
-		const { memory, store } = await openFixture();
+	it("hands out the blocks that need a model in build order through nextMerge and stores what commitMerge is given", async () => {
+		const { memory, store } = await openFixture({ limits: { summaryBytes: 4 } });
 		await noteMany(memory, 4);
 		expect(await memory.nextMerge()).toEqual({
 			startId: 0,
@@ -257,9 +243,9 @@ describe("memory", () => {
 				{ startId: 0, endId: 0, content: "m0" },
 				{ startId: 1, endId: 1, content: "m1" },
 			],
-			maxBytes: 280,
+			maxBytes: 4,
 		});
-		expect(await memory.commitMerge({ startId: 0, endId: 1 }, "first pair")).toBe(true);
+		expect(await memory.commitMerge({ startId: 0, endId: 1 }, "p01")).toBe(true);
 		expect(await memory.nextMerge()).toEqual({
 			startId: 2,
 			endId: 3,
@@ -267,25 +253,23 @@ describe("memory", () => {
 				{ startId: 2, endId: 2, content: "m2" },
 				{ startId: 3, endId: 3, content: "m3" },
 			],
-			maxBytes: 280,
+			maxBytes: 4,
 		});
-		expect(await memory.commitMerge({ startId: 2, endId: 3 }, "second pair")).toBe(true);
+		expect(await memory.commitMerge({ startId: 2, endId: 3 }, "p23")).toBe(true);
 		expect(await memory.nextMerge()).toEqual({
 			startId: 0,
 			endId: 3,
 			items: [
-				{ startId: 0, endId: 0, content: "m0" },
-				{ startId: 1, endId: 1, content: "m1" },
-				{ startId: 2, endId: 2, content: "m2" },
-				{ startId: 3, endId: 3, content: "m3" },
+				{ startId: 0, endId: 1, content: "p01" },
+				{ startId: 2, endId: 3, content: "p23" },
 			],
-			maxBytes: 280,
+			maxBytes: 4,
 		});
-		expect(await memory.commitMerge({ startId: 0, endId: 3 }, "both pairs")).toBe(true);
+		expect(await memory.commitMerge({ startId: 0, endId: 3 }, "all")).toBe(true);
 		expect(await memory.nextMerge()).toBeUndefined();
 		expect(await memory.pending()).toBe(0);
 		expect(await memory.commitMerge({ startId: 0, endId: 1 }, "again")).toBe(false);
-		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "first pair" }]);
+		expect(await store.getNodes([{ level: 1, startId: 0 }])).toEqual([{ level: 1, startId: 0, endId: 1, summary: "p01" }]);
 		await expect(memory.commitMerge({ startId: 1, endId: 2 }, "x")).rejects.toThrow(InvalidRange);
 	});
 
@@ -308,21 +292,18 @@ describe("memory", () => {
 		]);
 	});
 
-	it("without a summarizer compact merges nothing and manual commits fill the pending blocks", async () => {
-		const { memory } = await openFixture({ summarizer: null });
+	it("without a summarizer compact stores only free merges and manual commits fill the rest", async () => {
+		const { memory, store } = await openFixture({ summarizer: null, limits: { summaryBytes: 8 } });
 		await noteMany(memory, 4);
-		expect(await memory.compact()).toEqual({ merged: 0, pending: 3 });
-		expect((await memory.wake({ maxItems: 2 })).items).toEqual([
-			{ type: "pending", startId: 0, endId: 1 },
-			{ type: "pending", startId: 2, endId: 3 },
-		]);
+		await memory.note({ content: "long note", createdAt: 4 });
+		await memory.note({ content: "another", createdAt: 5 });
+		expect(await memory.compact()).toEqual({ merged: 2, pending: 2 });
+		const keys = [{ level: 1, startId: 0 }, { level: 1, startId: 2 }, { level: 1, startId: 4 }, { level: 2, startId: 0 }];
+		expect((await store.getNodes(keys)).map((node) => node.summary)).toEqual(["m0 / m1", "m2 / m3"]);
 		for (let input = await memory.nextMerge(); input !== undefined; input = await memory.nextMerge()) {
-			await memory.commitMerge(input, `manual ${input.startId}-${input.endId}`);
+			await memory.commitMerge(input, `c${input.startId}${input.endId}`);
 		}
 		expect(await memory.compact()).toEqual({ merged: 0, pending: 0 });
-		expect((await memory.wake({ maxItems: 2 })).items).toEqual([
-			{ type: "summary", startId: 0, endId: 1, content: "manual 0-1" },
-			{ type: "summary", startId: 2, endId: 3, content: "manual 2-3" },
-		]);
+		expect((await store.getNodes(keys)).map((node) => node.summary)).toEqual(["m0 / m1", "m2 / m3", "c45", "c03"]);
 	});
 });

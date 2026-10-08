@@ -11,6 +11,13 @@ export const joinSummarizer: MemorySummarizer = {
 	},
 };
 
+/** Fails the test that reaches it: for paths that must not call a model. */
+export const refusingSummarizer: MemorySummarizer = {
+	async summarize() {
+		throw new Error("the summarizer was called");
+	},
+};
+
 export const constantSummarizer: MemorySummarizer = {
 	async summarize() {
 		return "x";

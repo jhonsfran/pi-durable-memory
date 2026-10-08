@@ -90,17 +90,17 @@ export interface CompactResult {
 }
 
 export interface MemoryLimits {
-	/** Longest memory or summary, in UTF-8 bytes. A summary over the cap is truncated to it. Default 280. */
+	/** Longest memory, in UTF-8 bytes. Default 280. */
 	readonly maxEntryBytes: number;
-	/** Blocks of at most this many memories are summarized from the raw memories; larger blocks from their two child summaries. Default 16. */
-	readonly rawThreshold: number;
+	/** Target size of a summary, in UTF-8 bytes. Two children that fit in it together are joined without a model. A model summary over it is truncated to it. Default 512. */
+	readonly summaryBytes: number;
 	/** Default `wake()` item budget. Default 96. */
 	readonly maxItems: number;
 }
 
-/** What a summarizer sees: the block to compress and its children, which are raw memories or two child summaries. */
+/** What a summarizer sees: the block to merge and its two children, two memories or two child summaries. */
 export interface SummarizeInput extends MemoryRange {
-	/** Oldest first. A raw memory has `startId === endId`. */
+	/** The two children, oldest first. A memory has `startId === endId`. */
 	readonly items: ReadonlyArray<MemoryRange & { readonly content: string }>;
 	readonly maxBytes: number;
 }
@@ -121,9 +121,9 @@ export interface Memory {
 	/** Merges that `compact()` would perform now. */
 	pending(): Promise<number>;
 	/**
-	 * The next block compaction would summarize, with its children, or `undefined` when nothing is
-	 * pending. Together with `commitMerge()` this lets a caller supply the summary itself; `compact()`
-	 * is the same two steps with the injected summarizer in between.
+	 * The next block that needs a model, with its two children, or `undefined` when none does. Blocks
+	 * that need no model are stored on the way. Together with `commitMerge()` this lets a caller supply
+	 * the summary itself; `compact()` is the same two steps with the injected summarizer in between.
 	 */
 	nextMerge(): Promise<SummarizeInput | undefined>;
 	/** Store the summary for a block `nextMerge()` returned. False when the block is built already or is not the next one at its level. The summary is normalized and truncated like a note. */
@@ -162,7 +162,7 @@ export interface MemoryStore {
 
 export interface CreateMemoryOptions {
 	readonly store: MemoryStore;
-	/** Writes summaries in `compact()`. Without one, `compact()` performs no merges and callers summarize through `nextMerge()` and `commitMerge()`. */
+	/** Writes summaries in `compact()`. Without one, `compact()` stores only the merges that need no model, and callers summarize the rest through `nextMerge()` and `commitMerge()`. */
 	readonly summarizer?: MemorySummarizer | undefined;
 	readonly limits?: Partial<MemoryLimits> | undefined;
 }
