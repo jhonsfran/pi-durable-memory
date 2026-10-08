@@ -182,6 +182,26 @@ pnpm check   # typecheck, Node tests (core and extension on node:sqlite), worker
 pnpm build && node scripts/view-stability.mjs . 2000 24000   # how much of each wake the next one keeps
 ```
 
+## Try it over MCP
+
+`examples/mcp-demo` is one Worker that gives Claude Code or Codex a memory over MCP. `memory_note`, `memory_recall`, and `memory_zoom` work as in the Pi extension, and `memory_wake` reads the view. The memory object has no summarizer, so the agent writes each summary line itself through `memory_pending` and `memory_commit`. A web page shows the view and opens each `#a-b` line into its two halves. There is no login. Each memory lives at a URL with an unguessable id, and anyone who has that URL can read and write the memory.
+
+To run it locally, start the dev server. The script builds this package first.
+
+```sh
+pnpm install
+pnpm --filter mcp-demo dev   # http://localhost:8787
+```
+
+Open http://localhost:8787 and click **Create a memory**. The page shows the memory's URL and the command that connects your agent to it:
+
+```sh
+claude mcp add --transport http memory http://localhost:8787/m/<id>
+codex mcp add memory --url http://localhost:8787/m/<id>
+```
+
+With the dev server running, `pnpm --filter mcp-demo smoke` calls every tool through the MCP client and checks the replies.
+
 ## Credits
 
 The memory model is [OptMem](https://github.com/VictorTaelin/OptMem) by [Victor Taelin](https://github.com/VictorTaelin): an append-only log of one-line memories, a binary tree of summaries over aligned power-of-two blocks, and zoom and recall back to the raw entries. The view fold, the summarizer conversation, and the structure of the summarizer prompt follow his [OptChat spec](https://gist.github.com/VictorTaelin/91837951a5ce5b38f341ec1ba1df6449): a strictly binary tree, a stored view that only appends and merges its most due pair, a summarizer that sees that view as context with no ids, and a scale line with cut-at-limit retries to keep summaries near their size. OptChat logs every chat message. This package keeps OptMem's curated notes and builds OptChat's structure above them. His tools are written for a shell agent. This package is a TypeScript implementation of the same design for Pi Durable agents on Cloudflare Durable Objects, with an injected summarizer, scopes, idempotent notes, and an admission hook. No code is shared.
